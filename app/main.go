@@ -10,7 +10,11 @@ func handleConn(conn net.Conn) {
 	defer conn.Close()
 
 	buf := make([]byte, 1024)
-	n := conn.Read(buf)
+	n, err := conn.Read(buf)
+	if err ! nil {
+		fmt.Println("Error reading input: ", err.Error())
+		os.Exit(1)
+	}
 	fmt.Println(string(buf[:n]))
 
 	conn.Write([]byte("+PONG\r\n"))
