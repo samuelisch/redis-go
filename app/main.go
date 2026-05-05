@@ -16,7 +16,7 @@ func handleConn(conn net.Conn) {
 			fmt.Println("Error reading input: ", err.Error())
 			return
 		}
-		fmt.Println(string(buf[:n]))
+		fmt.Println(string(n))
 		conn.Write([]byte("+PONG\r\n"))
 	}
 }
