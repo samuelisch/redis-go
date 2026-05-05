@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"bufio"
+	"strconv"
+	"strings"
 )
 
 func parseCommand(conn net.Conn) ([]string, error) {
@@ -15,7 +18,7 @@ func parseCommand(conn net.Conn) ([]string, error) {
 	}
 	argCount, _ := strconv.Atoi(strings.TrimSpace(line[1:]))
 
-	args : make([]string, 0, argCount)
+	args := make([]string, 0, argCount)
 	for i := 0; i < argCount; i++ {
 		reader.ReadString('\n')
 		vale, _ := reader.ReadString('\n')
