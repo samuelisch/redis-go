@@ -21,7 +21,7 @@ func parseCommand(conn net.Conn) ([]string, error) {
 	args := make([]string, 0, argCount)
 	for i := 0; i < argCount; i++ {
 		reader.ReadString('\n')
-		vale, _ := reader.ReadString('\n')
+		value, _ := reader.ReadString('\n')
 		args = append(args, strings.TrimSpace(value))
 	}
 	return args, nil
@@ -32,12 +32,15 @@ func handleConn(conn net.Conn) {
 
 	for {
 		args, err := parseCommand(conn)
+		if err != nil {
+			return
+		}
 
 		switch strings.ToUpper(args[0]) {
 		case "PING":
 			conn.Write([]byte("+PONG\r\n"))
 		case "ECHO":
-			conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(args[1], args[1]))))
+			conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(args[1]), args[1])))
 		}
 	}
 }
