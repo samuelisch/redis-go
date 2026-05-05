@@ -6,18 +6,36 @@ import (
 	"os"
 )
 
+func parseCommand(conn net.Conn) ([]string, error) {
+	reader := bufio.NewReader(conn)
+
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	argCount, _ := strconv.Atoi(strings.TrimSpace(line[1:]))
+
+	args : make([]string, 0, argCount)
+	for i := 0; i < argCount; i++ {
+		reader.ReadString('\n')
+		vale, _ := reader.ReadString('\n')
+		args = append(args, strings.TrimSpace(value))
+	}
+	return args, nil
+}
+
 func handleConn(conn net.Conn) {
 	defer conn.Close()
 
-	buf := make([]byte, 1024)
 	for {
-		n, err := conn.Read(buf)
-		if err != nil {
-			fmt.Println("Error reading input: ", err.Error())
-			return
+		args, err := parseCommand(conn)
+
+		switch strings.ToUpper(args[0]) {
+		case "PING":
+			conn.Write([]byte("+PONG\r\n"))
+		case "ECHO":
+			conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(args[1], args[1]))))
 		}
-		fmt.Println(string(n))
-		conn.Write([]byte("+PONG\r\n"))
 	}
 }
 
