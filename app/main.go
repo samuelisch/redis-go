@@ -11,7 +11,7 @@ func handleConn(conn net.Conn) {
 
 	buf := make([]byte, 1024)
 	n, err := conn.Read(buf)
-	if err ! nil {
+	if err != nil {
 		fmt.Println("Error reading input: ", err.Error())
 		os.Exit(1)
 	}
