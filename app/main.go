@@ -11,13 +11,23 @@ import (
 )
 
 type ExpiryType string
-
 const (
 	ExpiryPX ExpiryType = "PX"
 	ExpiryEX ExpiryType = "EX"
 )
 
-var store = map[string]string{}
+type ValueKind int
+const (
+	KindString ValueKind = iota
+	KindStringList
+)
+type StoreValue struct {
+	Kind ValueKind
+	S string
+	Slice []string
+}
+
+var store = map[string]StoreValue{}
 
 func setExpiry(expiryType ExpiryType, ttl int64, storedKey string) {
 	if expiryType != ExpiryPX && expiryType != ExpiryEX {
@@ -68,15 +78,21 @@ func handleConn(conn net.Conn) {
 		case "ECHO":
 			conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(args[1]), args[1])))
 		case "GET":
-			fmt.Println(store)
 			v, found := store[args[1]]
 			if found {
-				conn.Write([]byte("$-1\r\n"))
+				if v.Kind != KindString {
+					fmt.Errorf("WRONGTYPE trying to access something other than a string")
+					return
+				}
+				conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(v.S), v.S)))
 			} else {
-				conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(v), v)))
+				conn.Write([]byte("$-1\r\n"))
 			}
 		case "SET":
-			store[args[1]] = args[2]
+			store[args[1]] = StoreValue{
+				Kind: KindString,
+				S: args[2],
+			}
 			if len(args) >= 5 {
 				timeoutType := strings.ToUpper(args[3])
 				if timeoutType == "PX" || timeoutType == "EX" {
@@ -85,6 +101,24 @@ func handleConn(conn net.Conn) {
 				}
 			}
 			conn.Write([]byte("+OK\r\n"))
+		case "RPUSH":
+			v, found := store[args[1]]
+			list := []string{}
+			if found {
+				if v.Kind != KindStringList {
+					fmt.Errorf("WRONGTYPE trying to access something other than a list")
+					return
+				}
+				list = v.Slice
+			}
+			for _, item := range args[2:] {
+				list = append(list, item)
+			}
+			store[args[1]] = StoreValue{
+				Kind: KindStringList, 
+				Slice: list,
+			}
+			conn.Write([]byte(fmt.Sprintf(":%d\r\n", len(list))))
 		default:
 			conn.Write([]byte("+NO IDEA WHAT THIS IS MATE\r\n"))
 		}
