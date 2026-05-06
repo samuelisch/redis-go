@@ -70,10 +70,10 @@ func handleConn(conn net.Conn) {
 		case "GET":
 			fmt.Println(store)
 			v, found := store[args[1]]
-			if found != false {
-				conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(v), v)))
-			} else {
+			if found {
 				conn.Write([]byte("$-1\r\n"))
+			} else {
+				conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(v), v)))
 			}
 		case "SET":
 			store[args[1]] = args[2]
