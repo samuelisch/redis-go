@@ -147,6 +147,23 @@ func handleRpush(args []string) string {
 	return encodeInteger(len(list))
 }
 
+func handleLpush(args []string) string {
+	if len(args) < 3 {
+		return encodeError("ERR wrong number of arguments for 'rpush' command")
+	}
+	v, found := store[args[1]]
+	list := []string{}
+	if found {
+		if v.Kind != KindStringList {
+			return encodeError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+		list = v.Slice
+	}
+	list = append(args[2:], list...)
+	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list}
+	return encodeInteger(len(list))
+}
+
 func handleLrange(args []string) string {
 	if len(args) != 4 {
 		return encodeError("ERR wrong number of arguments for 'lrange' command")
@@ -169,12 +186,12 @@ func handleLrange(args []string) string {
 	list := v.Slice
 	if start < 0 {
 		start = len(list) + start
+		if start < 0 {
+			start = 0
+		}
 	}
 	if end < 0 {
 		end = len(list) + end
-	}
-	if start < 0 {
-		start = 0
 	}
 	if end >= len(list) {
 		end = len(list) - 1
@@ -186,11 +203,12 @@ func handleLrange(args []string) string {
 }
 
 var commandHandlers = map[string]func([]string) string{
-	"PING":   handlePing,
-	"ECHO":   handleEcho,
-	"GET":    handleGet,
-	"SET":    handleSet,
-	"RPUSH":  handleRpush,
+	"PING": handlePing,
+	"ECHO": handleEcho,
+	"GET": handleGet,
+	"SET": handleSet,
+	"RPUSH": handleRpush,
+	"LPUSH": handleLpush,
 	"LRANGE": handleLrange,
 }
 
