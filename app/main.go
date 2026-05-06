@@ -130,7 +130,12 @@ func handleConn(conn net.Conn) {
 				if err != nil {
 					conn.Write([]byte("*0\r\n"))
 				}
-				list := v.Slice[start:end+1]
+				if end < len(v.Slice) {
+					end += 1
+				} else {
+					end = len(v.Slice)
+				}
+				list := v.Slice[start:end]
 				resp := "*" + strconv.Itoa(len(list)) + "\r\n"
 				for _, item := range list {
 					s := fmt.Sprintf("$%d\r\n%s\r\n", len(item), item)
