@@ -120,10 +120,17 @@ func handleConn(conn net.Conn) {
 			}
 			conn.Write([]byte(fmt.Sprintf(":%d\r\n", len(list))))
 		case "LRANGE":
-			// check for list existence
 			v, found := store[args[1]]
 			if found && len(args) == 4 {
-				list := v.Slice[args[2], args[3]]
+				start, err := strconv.Atoi(args[2])
+				if err != nil {
+					conn.Write([]byte("*0\r\n"))
+				}
+				end, err := strconv.Atoi(args[3])
+				if err != nil {
+					conn.Write([]byte("*0\r\n"))
+				}
+				list := v.Slice[start:end+1]
 				resp := "*" + strconv.Itoa(len(list)) + "\r\n"
 				for _, item := range list {
 					s := fmt.Sprintf("$%d\r\n%s\r\n", len(item), item)
@@ -133,7 +140,6 @@ func handleConn(conn net.Conn) {
 			} else {
 				conn.Write([]byte("*0\r\n"))
 			}
-			// if exists, print out according to index, with list RESP format (*len\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n)
 		default:
 			conn.Write([]byte("+NO IDEA WHAT THIS IS MATE\r\n"))
 		}
