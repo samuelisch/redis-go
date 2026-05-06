@@ -167,13 +167,16 @@ func handleLrange(args []string) string {
 		return encodeError("ERR value is not an integer or out of range")
 	}
 	list := v.Slice
+	if start < 0 {
+		start = len(list) + start
+	}
 	if end < 0 {
 		end = len(list) + end
 	}
 	if end >= len(list) {
 		end = len(list) - 1
 	}
-	if start < 0 || start > end {
+	if start > end {
 		return encodeArray([]string{})
 	}
 	return encodeArray(list[start : end+1])
