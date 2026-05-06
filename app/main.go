@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-func parseCommand(conn net.Conn) ([]string, error) {
-	reader := bufio.NewReader(conn)
+var store = map[string]string{}
 
+func parseCommand(reader *bufio.Reader) ([]string, error) {
 	line, err := reader.ReadString('\n')
 	if err != nil {
 		return nil, err
@@ -30,8 +30,9 @@ func parseCommand(conn net.Conn) ([]string, error) {
 func handleConn(conn net.Conn) {
 	defer conn.Close()
 
+	reader := bufio.NewReader(conn)
 	for {
-		args, err := parseCommand(conn)
+		args, err := parseCommand(reader)
 		if err != nil {
 			return
 		}
@@ -41,6 +42,19 @@ func handleConn(conn net.Conn) {
 			conn.Write([]byte("+PONG\r\n"))
 		case "ECHO":
 			conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(args[1]), args[1])))
+		case "GET":
+			fmt.Println(store)
+			v, found := store[args[1]]
+			if found != false {
+				conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(v), v)))
+			} else {
+				conn.Write([]byte("$-1\r\n"))
+			}
+		case "SET":
+			store[args[1]] = args[2]
+			conn.Write([]byte("+OK\r\n"))
+		default:
+			conn.Write([]byte("+NO IDEA WHAT THIS IS MATE\r\n"))
 		}
 	}
 }
