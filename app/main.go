@@ -173,6 +173,9 @@ func handleLrange(args []string) string {
 	if end < 0 {
 		end = len(list) + end
 	}
+	if start < 0 {
+		start = 0
+	}
 	if end >= len(list) {
 		end = len(list) - 1
 	}
