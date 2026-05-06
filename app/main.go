@@ -7,9 +7,34 @@ import (
 	"bufio"
 	"strconv"
 	"strings"
+	"time"
+)
+
+type ExpiryType string
+
+const (
+	ExpiryPX ExpiryType = "PX"
+	ExpiryEX ExpiryType = "EX"
 )
 
 var store = map[string]string{}
+
+func setExpiry(expiryType ExpiryType, ttl int64, storedKey string) {
+	if expiryType != ExpiryPX || expiryType != ExpiryEX {
+		fmt.Println("EXPIRY TYPE NOT VALID, SKIPPING")
+		return
+	}
+	var expiryTime int
+	if expiryType == "EX" {
+		expiryTime = ttl*time.Second
+	} else {
+		expiryTime = ttl*time.Milisecond
+	}
+	time.AfterFunc(expiryTime, func() {
+		delete(store, storedKey)
+		fmt.Println("Expired key: ", storedKey)
+	})
+}
 
 func parseCommand(reader *bufio.Reader) ([]string, error) {
 	line, err := reader.ReadString('\n')
@@ -51,7 +76,12 @@ func handleConn(conn net.Conn) {
 				conn.Write([]byte("$-1\r\n"))
 			}
 		case "SET":
+			timeoutType := strings.ToUpper(args[3])
 			store[args[1]] = args[2]
+			if timeoutType == "PX" || timeoutType == "EX" {
+				expiryValue := args[4]
+				setExpiry(timeoutType, expiryValue, storedKey)
+			}
 			conn.Write([]byte("+OK\r\n"))
 		default:
 			conn.Write([]byte("+NO IDEA WHAT THIS IS MATE\r\n"))
