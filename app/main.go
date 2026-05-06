@@ -159,7 +159,9 @@ func handleLpush(args []string) string {
 		}
 		list = v.Slice
 	}
-	list = append(args[2:], list...)
+	for i := 2; i < len(args); i++ {
+		list = append([]string{args[i]}, list...)
+	}
 	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list}
 	return encodeInteger(len(list))
 }
