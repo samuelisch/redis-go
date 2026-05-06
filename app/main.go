@@ -20,15 +20,15 @@ const (
 var store = map[string]string{}
 
 func setExpiry(expiryType ExpiryType, ttl int64, storedKey string) {
-	if expiryType != ExpiryPX || expiryType != ExpiryEX {
+	if expiryType != ExpiryPX && expiryType != ExpiryEX {
 		fmt.Println("EXPIRY TYPE NOT VALID, SKIPPING")
 		return
 	}
-	var expiryTime int
+	var expiryTime time.Duration
 	if expiryType == "EX" {
-		expiryTime = ttl*time.Second
+		expiryTime = time.Duration(ttl)*time.Second
 	} else {
-		expiryTime = ttl*time.Milisecond
+		expiryTime = time.Duration(ttl)*time.Millisecond
 	}
 	time.AfterFunc(expiryTime, func() {
 		delete(store, storedKey)
@@ -76,11 +76,13 @@ func handleConn(conn net.Conn) {
 				conn.Write([]byte("$-1\r\n"))
 			}
 		case "SET":
-			timeoutType := strings.ToUpper(args[3])
 			store[args[1]] = args[2]
-			if timeoutType == "PX" || timeoutType == "EX" {
-				expiryValue := args[4]
-				setExpiry(timeoutType, expiryValue, storedKey)
+			if len(args) >= 5 {
+				timeoutType := strings.ToUpper(args[3])
+				if timeoutType == "PX" || timeoutType == "EX" {
+					expiryValue, _ := strconv.ParseInt(args[4], 10, 64)
+					setExpiry(ExpiryType(timeoutType), expiryValue, args[1])
+				}
 			}
 			conn.Write([]byte("+OK\r\n"))
 		default:
