@@ -62,6 +62,132 @@ func parseCommand(reader *bufio.Reader) ([]string, error) {
 	return args, nil
 }
 
+func encodeSimpleString(s string) string {
+	return fmt.Sprintf("+%s\r\n", s)
+}
+
+func encodeError(msg string) string {
+	return fmt.Sprintf("-%s\r\n", msg)
+}
+
+func encodeBulkString(s string) string {
+	return fmt.Sprintf("$%d\r\n%s\r\n", len(s), s)
+}
+
+func encodeNullBulk() string {
+	return "$-1\r\n"
+}
+
+func encodeInteger(n int) string {
+	return fmt.Sprintf(":%d\r\n", n)
+}
+
+func encodeArray(items []string) string {
+	resp := fmt.Sprintf("*%d\r\n", len(items))
+	for _, item := range items {
+		resp += encodeBulkString(item)
+	}
+	return resp
+}
+
+func handlePing(args []string) string {
+	return encodeSimpleString("PONG")
+}
+
+func handleEcho(args []string) string {
+	if len(args) < 2 {
+		return encodeError("ERR wrong number of arguments for 'echo' command")
+	}
+	return encodeBulkString(args[1])
+}
+
+func handleGet(args []string) string {
+	if len(args) < 2 {
+		return encodeError("ERR wrong number of arguments for 'get' command")
+	}
+	v, found := store[args[1]]
+	if !found {
+		return encodeNullBulk()
+	}
+	if v.Kind != KindString {
+		return encodeError("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	return encodeBulkString(v.S)
+}
+
+func handleSet(args []string) string {
+	if len(args) < 3 {
+		return encodeError("ERR wrong number of arguments for 'set' command")
+	}
+	store[args[1]] = StoreValue{Kind: KindString, S: args[2]}
+	if len(args) >= 5 {
+		timeoutType := strings.ToUpper(args[3])
+		if timeoutType == "PX" || timeoutType == "EX" {
+			expiryValue, _ := strconv.ParseInt(args[4], 10, 64)
+			setExpiry(ExpiryType(timeoutType), expiryValue, args[1])
+		}
+	}
+	return encodeSimpleString("OK")
+}
+
+func handleRpush(args []string) string {
+	if len(args) < 3 {
+		return encodeError("ERR wrong number of arguments for 'rpush' command")
+	}
+	v, found := store[args[1]]
+	list := []string{}
+	if found {
+		if v.Kind != KindStringList {
+			return encodeError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+		list = v.Slice
+	}
+	list = append(list, args[2:]...)
+	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list}
+	return encodeInteger(len(list))
+}
+
+func handleLrange(args []string) string {
+	if len(args) != 4 {
+		return encodeError("ERR wrong number of arguments for 'lrange' command")
+	}
+	v, found := store[args[1]]
+	if !found {
+		return encodeArray([]string{})
+	}
+	if v.Kind != KindStringList {
+		return encodeError("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	start, err := strconv.Atoi(args[2])
+	if err != nil {
+		return encodeError("ERR value is not an integer or out of range")
+	}
+	end, err := strconv.Atoi(args[3])
+	if err != nil {
+		return encodeError("ERR value is not an integer or out of range")
+	}
+	list := v.Slice
+	if end < 0 {
+		end = len(list) + end
+	}
+	if end >= len(list) {
+		end = len(list) - 1
+	}
+	if start < 0 || start > end {
+		return encodeArray([]string{})
+	}
+	return encodeArray(list[start : end+1])
+}
+
+var commandHandlers = map[string]func([]string) string{
+	"PING":   handlePing,
+	"ECHO":   handleEcho,
+	"GET":    handleGet,
+	"SET":    handleSet,
+	"RPUSH":  handleRpush,
+	"LRANGE": handleLrange,
+}
+
 func handleConn(conn net.Conn) {
 	defer conn.Close()
 
@@ -72,82 +198,13 @@ func handleConn(conn net.Conn) {
 			return
 		}
 
-		switch strings.ToUpper(args[0]) {
-		case "PING":
-			conn.Write([]byte("+PONG\r\n"))
-		case "ECHO":
-			conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(args[1]), args[1])))
-		case "GET":
-			v, found := store[args[1]]
-			if found {
-				if v.Kind != KindString {
-					fmt.Errorf("WRONGTYPE trying to access something other than a string")
-					return
-				}
-				conn.Write([]byte(fmt.Sprintf("$%d\r\n%s\r\n", len(v.S), v.S)))
-			} else {
-				conn.Write([]byte("$-1\r\n"))
-			}
-		case "SET":
-			store[args[1]] = StoreValue{
-				Kind: KindString,
-				S: args[2],
-			}
-			if len(args) >= 5 {
-				timeoutType := strings.ToUpper(args[3])
-				if timeoutType == "PX" || timeoutType == "EX" {
-					expiryValue, _ := strconv.ParseInt(args[4], 10, 64)
-					setExpiry(ExpiryType(timeoutType), expiryValue, args[1])
-				}
-			}
-			conn.Write([]byte("+OK\r\n"))
-		case "RPUSH":
-			v, found := store[args[1]]
-			list := []string{}
-			if found {
-				if v.Kind != KindStringList {
-					fmt.Errorf("WRONGTYPE trying to access something other than a list")
-					return
-				}
-				list = v.Slice
-			}
-			for _, item := range args[2:] {
-				list = append(list, item)
-			}
-			store[args[1]] = StoreValue{
-				Kind: KindStringList, 
-				Slice: list,
-			}
-			conn.Write([]byte(fmt.Sprintf(":%d\r\n", len(list))))
-		case "LRANGE":
-			v, found := store[args[1]]
-			if found && len(args) == 4 {
-				start, err := strconv.Atoi(args[2])
-				if err != nil {
-					conn.Write([]byte("*0\r\n"))
-				}
-				end, err := strconv.Atoi(args[3])
-				if err != nil {
-					conn.Write([]byte("*0\r\n"))
-				}
-				if end < len(v.Slice) {
-					end += 1
-				} else {
-					end = len(v.Slice)
-				}
-				list := v.Slice[start:end]
-				resp := "*" + strconv.Itoa(len(list)) + "\r\n"
-				for _, item := range list {
-					s := fmt.Sprintf("$%d\r\n%s\r\n", len(item), item)
-					resp += s
-				}
-				conn.Write([]byte(resp));
-			} else {
-				conn.Write([]byte("*0\r\n"))
-			}
-		default:
-			conn.Write([]byte("+NO IDEA WHAT THIS IS MATE\r\n"))
+		cmd := strings.ToUpper(args[0])
+		handler, ok := commandHandlers[cmd]
+		if !ok {
+			conn.Write([]byte(encodeError("ERR unknown command '" + cmd + "'")))
+			continue
 		}
+		conn.Write([]byte(handler(args)))
 	}
 }
 
