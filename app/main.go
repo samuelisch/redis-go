@@ -166,6 +166,17 @@ func handleLpush(args []string) string {
 	return encodeInteger(len(list))
 }
 
+func handleLlen(args []string) string {
+	if len(args) != 2 {
+		return encodeError("ERR wrong number of arguments for 'llen' command")
+	}
+	v, found := store[args[1]]
+	if !found {
+		return encodeInteger(0)
+	}
+	return encodeInteger(len(v.Slice))
+}
+
 func handleLrange(args []string) string {
 	if len(args) != 4 {
 		return encodeError("ERR wrong number of arguments for 'lrange' command")
@@ -211,6 +222,7 @@ var commandHandlers = map[string]func([]string) string{
 	"SET": handleSet,
 	"RPUSH": handleRpush,
 	"LPUSH": handleLpush,
+	"LLEN": handleLlen,
 	"LRANGE": handleLrange,
 }
 
