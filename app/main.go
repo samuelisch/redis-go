@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"sync"
 )
 
 type ExpiryType string
@@ -28,6 +29,8 @@ type StoreValue struct {
 }
 
 var store = map[string]StoreValue{}
+var waiters = map[string][]chan string{}
+var waitersMu sync.Mutex
 
 func setExpiry(expiryType ExpiryType, ttl int64, storedKey string) {
 	if expiryType != ExpiryPX && expiryType != ExpiryEX {
@@ -130,6 +133,22 @@ func handleSet(args []string) string {
 	return encodeSimpleString("OK")
 }
 
+func checkWaiters(key string, list []string) []string {
+	waitersMu.Lock()
+	for len(list) > 0 {
+		chans, ok := waiters[key]
+		if !ok || len(chans) == 0 {
+			break
+		}
+		ch := chans[0]
+		waiters[key] = chans[1:]
+		ch <- list[0]
+		list = list[1:]
+	}
+	waitersMu.Unlock()
+	return list
+}
+
 func handleRpush(args []string) string {
 	if len(args) < 3 {
 		return encodeError("ERR wrong number of arguments for 'rpush' command")
@@ -143,7 +162,9 @@ func handleRpush(args []string) string {
 		list = v.Slice
 	}
 	list = append(list, args[2:]...)
+	list = checkWaiters(args[1], list)
 	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list}
+
 	return encodeInteger(len(list))
 }
 
@@ -162,7 +183,9 @@ func handleLpush(args []string) string {
 	for i := 2; i < len(args); i++ {
 		list = append([]string{args[i]}, list...)
 	}
+	list = checkWaiters(args[1], list)
 	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list}
+
 	return encodeInteger(len(list))
 }
 
@@ -256,6 +279,32 @@ func handleLpop(args []string) string {
 	return encodeBulkString(element);
 }
 
+func handleBlpop(args []string) string {
+	if len(args) != 3 {
+		return encodeError("ERR wrong number of arguments for 'lpop' command")
+	}
+	key := args[1]
+	_, err := strconv.Atoi(args[2])
+	if err != nil {
+		return encodeError("ERR value is not an integer or out of range")
+	}
+
+	v, found := store[key]
+	if found && v.Kind == KindStringList && len(v.Slice) > 0 {
+		element := v.Slice[0]
+		store[key] = StoreValue{Kind: KindStringList, Slice: v.Slice[1:]}
+		return encodeArray([]string{key, element})
+	}
+
+	ch := make(chan string, 1)
+	waitersMu.Lock()
+	waiters[key] = append(waiters[key], ch)
+	waitersMu.Unlock()
+
+	element := <-ch
+	return encodeArray([]string{key, element})
+}
+
 var commandHandlers = map[string]func([]string) string{
 	"PING": handlePing,
 	"ECHO": handleEcho,
@@ -266,6 +315,7 @@ var commandHandlers = map[string]func([]string) string{
 	"LLEN": handleLlen,
 	"LRANGE": handleLrange,
 	"LPOP": handleLpop,
+	"BLPOP": handleBlpop,
 }
 
 func handleConn(conn net.Conn) {
