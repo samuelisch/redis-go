@@ -216,7 +216,7 @@ func handleLrange(args []string) string {
 }
 
 func handleLpop(args []string) string {
-	if len(args) > 3 || len(args < 2) {
+	if len(args) < 2 || len(args) > 3 {
 		return encodeError("ERR wrong number of arguments for 'lpop' command")
 	}
 	v, found := store[args[1]]
@@ -226,18 +226,34 @@ func handleLpop(args []string) string {
 	if v.Kind != KindStringList {
 		return encodeError("WRONGTYPE Operation against a key holding the wrong kind of value")
 	}
-	numToRemove, err := strconv.Atoi(args[2])
-	if err != nil {
-		return encodeError("ERR value is not an integer or out of range")
-	}
+
 	list := v.Slice
-	removed := []string{}
-	for i := 0 i < numToRemove; i++ {
-		element := list[0]
-		append(removed, element)
+	if (len(list) == 0) {
+		return encodeNullBulk()
 	}
-	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list[numToRemove:]}
-	return encodeArray(removed)
+
+	if (len(args) == 3) {
+		numToRemove, err := strconv.Atoi(args[2])
+		if err != nil {
+			return encodeError("ERR value is not an integer or out of range")
+		}
+		if (numToRemove >= len(list)) {
+			store[args[1]] = StoreValue{Kind: KindStringList, Slice: []string{}}
+			return encodeArray(list)
+		}
+		removed := []string{}
+		for i := 0; i < numToRemove; i++ {
+			element := list[0]
+			removed = append(removed, element)
+			list = list[1:]
+		}
+		store[args[1]] = StoreValue{Kind: KindStringList, Slice: list}
+		return encodeArray(removed)
+	}
+
+	element := list[0]
+	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list[1:]}
+	return encodeBulkString(element);
 }
 
 var commandHandlers = map[string]func([]string) string{
