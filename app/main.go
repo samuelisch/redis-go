@@ -162,10 +162,11 @@ func handleRpush(args []string) string {
 		list = v.Slice
 	}
 	list = append(list, args[2:]...)
+	count := len(list)
 	list = checkWaiters(args[1], list)
 	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list}
 
-	return encodeInteger(len(list))
+	return encodeInteger(count)
 }
 
 func handleLpush(args []string) string {
@@ -183,10 +184,11 @@ func handleLpush(args []string) string {
 	for i := 2; i < len(args); i++ {
 		list = append([]string{args[i]}, list...)
 	}
+	count := len(list)
 	list = checkWaiters(args[1], list)
 	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list}
 
-	return encodeInteger(len(list))
+	return encodeInteger(count)
 }
 
 func handleLlen(args []string) string {
