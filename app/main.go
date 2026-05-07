@@ -93,6 +93,10 @@ func encodeArray(items []string) string {
 	return resp
 }
 
+func encodeNullArray() string {
+	return "*-1\r\n"
+}
+
 func handlePing(args []string) string {
 	return encodeSimpleString("PONG")
 }
@@ -321,7 +325,7 @@ func handleBlpop(args []string) string {
 
 	element, ok := <-ch
 	if (!ok) {
-		return encodeNullBulk()
+		return encodeNullArray()
 	}
 
 	return encodeArray([]string{key, element})
