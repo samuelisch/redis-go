@@ -94,7 +94,7 @@ func encodeArray(items []string) string {
 }
 
 func encodeNullArray() string {
-	return fmt.Sprintf("*-1\r\n")
+	return "*-1\r\n"
 }
 
 func handlePing(args []string) string {
@@ -290,7 +290,7 @@ func handleBlpop(args []string) string {
 		return encodeError("ERR wrong number of arguments for 'lpop' command")
 	}
 	key := args[1]
-	timeout, err := strconv.Atoi(args[2])
+	timeout, err := strconv.ParseFloat(args[2], 64)
 	if err != nil {
 		return encodeError("ERR value is not an integer or out of range")
 	}
@@ -308,7 +308,7 @@ func handleBlpop(args []string) string {
 	waitersMu.Unlock()
 
 	if timeout > 0 {
-		expiryTime := time.Duration(timeout)*time.Second
+		expiryTime := time.Duration(timeout * float64(time.Second))
 		time.AfterFunc(expiryTime, func() {
 			waitersMu.Lock()
 			chans := waiters[key]
