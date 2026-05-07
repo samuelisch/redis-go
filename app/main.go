@@ -215,6 +215,23 @@ func handleLrange(args []string) string {
 	return encodeArray(list[start : end+1])
 }
 
+func handleLpop(args []string) string {
+	if len(args) != 2 {
+		return encodeError("ERR wrong number of arguments for 'lpop' command")
+	}
+	v, found := store[args[1]]
+	if !found {
+		return encodeNullBulk()
+	}
+	if v.Kind != KindStringList {
+		return encodeError("WRONGTYPE Operation against a key holding the wrong kind of value")
+	}
+	list := v.Slice
+	element := list[len(list) - 1]
+	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list[:len(list) - 1]}
+	return encodeBulkString(element)
+}
+
 var commandHandlers = map[string]func([]string) string{
 	"PING": handlePing,
 	"ECHO": handleEcho,
@@ -224,6 +241,7 @@ var commandHandlers = map[string]func([]string) string{
 	"LPUSH": handleLpush,
 	"LLEN": handleLlen,
 	"LRANGE": handleLrange,
+	"LPOP": handleLpop,
 }
 
 func handleConn(conn net.Conn) {
