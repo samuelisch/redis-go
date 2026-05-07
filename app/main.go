@@ -1,14 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"os"
-	"bufio"
 	"strconv"
 	"strings"
-	"time"
 	"sync"
+	"time"
 )
 
 type ExpiryType string
@@ -189,7 +189,7 @@ func handleRpush(args []string) string {
 
 func handleLpush(args []string) string {
 	if len(args) < 3 {
-		return encodeError("ERR wrong number of arguments for 'rpush' command")
+		return encodeError("ERR wrong number of arguments for 'lpush' command")
 	}
 	v, found := store[args[1]]
 	list := []string{}
@@ -271,20 +271,20 @@ func handleLpop(args []string) string {
 	}
 
 	list := v.Slice
-	if (len(list) == 0) {
+	if len(list) == 0 {
 		return encodeNullBulk()
 	}
 
-	if (len(args) == 3) {
+	if len(args) == 3 {
 		numToRemove, err := strconv.Atoi(args[2])
 		if err != nil {
 			return encodeError("ERR value is not an integer or out of range")
 		}
-		if (numToRemove >= len(list)) {
+		if numToRemove >= len(list) {
 			store[args[1]] = StoreValue{Kind: KindStringList, Slice: []string{}}
 			return encodeArray(list)
 		}
-		removed := []string{}
+		var removed []string
 		for i := 0; i < numToRemove; i++ {
 			element := list[0]
 			removed = append(removed, element)
@@ -296,7 +296,7 @@ func handleLpop(args []string) string {
 
 	element := list[0]
 	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list[1:]}
-	return encodeBulkString(element);
+	return encodeBulkString(element)
 }
 
 func handleBlpop(args []string) string {
@@ -338,7 +338,7 @@ func handleBlpop(args []string) string {
 	}
 
 	element, ok := <-ch
-	if (!ok) {
+	if !ok {
 		return encodeNullArray()
 	}
 
@@ -349,8 +349,7 @@ func handleType(args []string) string {
 	if len(args) != 2 {
 		return encodeError("ERR wrong number of arguments for 'type' command")
 	}
-	key := args[1]
-	v, found := store[key]
+	v, found := store[args[1]]
 	if !found {
 		return encodeSimpleString("none")
 	}
