@@ -227,8 +227,8 @@ func handleLpop(args []string) string {
 		return encodeError("WRONGTYPE Operation against a key holding the wrong kind of value")
 	}
 	list := v.Slice
-	element := list[len(list) - 1]
-	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list[:len(list) - 1]}
+	element := list[0]
+	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list[1:]}
 	return encodeBulkString(element)
 }
 
