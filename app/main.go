@@ -21,11 +21,25 @@ type ValueKind int
 const (
 	KindString ValueKind = iota
 	KindStringList
+	KindSet
+	KindZSet
+	KindHash
+	KindStream
+	KindVectorSet
 )
 type StoreValue struct {
 	Kind ValueKind
 	S string
 	Slice []string
+}
+var kindNames = map[ValueKind]string {
+	KindString: "string",
+	KindStringList: "list",
+	KindSet: "set",
+	KindZSet: "zset",
+	KindHash: "hash",
+	KindStream: "stream",
+	KindVectorSet: "vectorset",
 }
 
 var store = map[string]StoreValue{}
@@ -331,6 +345,18 @@ func handleBlpop(args []string) string {
 	return encodeArray([]string{key, element})
 }
 
+func handleType(args []string) string {
+	if len(args) != 2 {
+		return encodeError("ERR wrong number of arguments for 'type' command")
+	}
+	key := args[1]
+	v, found := store[key]
+	if !found {
+		return encodeSimpleString("none")
+	}
+	return encodeSimpleString(kindNames[v.Kind])
+}
+
 var commandHandlers = map[string]func([]string) string{
 	"PING": handlePing,
 	"ECHO": handleEcho,
@@ -342,6 +368,7 @@ var commandHandlers = map[string]func([]string) string{
 	"LRANGE": handleLrange,
 	"LPOP": handleLpop,
 	"BLPOP": handleBlpop,
+	"TYPE": handleType,
 }
 
 func handleConn(conn net.Conn) {
