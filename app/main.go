@@ -94,7 +94,7 @@ func encodeArray(items []string) string {
 }
 
 func encodeNullArray() string {
-	return "*-1\r\n"
+	return encodeBulkString("*-1\r\n")
 }
 
 func handlePing(args []string) string {
