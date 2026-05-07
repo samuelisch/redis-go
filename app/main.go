@@ -286,7 +286,7 @@ func handleBlpop(args []string) string {
 		return encodeError("ERR wrong number of arguments for 'lpop' command")
 	}
 	key := args[1]
-	_, err := strconv.Atoi(args[2])
+	timeout, err := strconv.Atoi(args[2])
 	if err != nil {
 		return encodeError("ERR value is not an integer or out of range")
 	}
@@ -308,9 +308,9 @@ func handleBlpop(args []string) string {
 		time.AfterFunc(expiryTime, func() {
 			waitersMu.Lock()
 			chans := waiters[key]
-			for i, c := range changs {
+			for i, c := range chans {
 				if c == ch {
-					waiters[key] = append(chans[:i], chans[i + 1 ]...)
+					waiters[key] = append(chans[:i], chans[i+1:]...)
 					close(ch)
 					break
 				}
