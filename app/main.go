@@ -357,34 +357,57 @@ func handleType(args []string) string {
 	return encodeSimpleString(kindNames[v.Kind])
 }
 
-func validateEntryId(stream []map[string]string, id string) string {
+func validateEntryId(stream []map[string]string, id string) (string, string) {
 	splitId := strings.Split(id, "-")
-	if len(splitId) != 2 {
-		return encodeError("ERR The ID specific in XADD must follow the convention *-*")
+	if id != "*" && len(splitId) != 2 {
+		return id, encodeError("ERR The ID specific in XADD must follow the convention num-num, num-* or *")
 	}
 	lastEntrySplitId := []string{"0", "0"}
 	if len(stream) > 0 {
 		lastEntrySplitId = strings.Split(stream[len(stream)-1]["id"], "-")
 	}
 
-	lastEntryMs, _ := strconv.Atoi(lastEntrySplitId[0])
+	lastEntryMs, _ := strconv.ParseInt(lastEntrySplitId[0], 10, 64)
 	lastEntrySeq, _ := strconv.Atoi(lastEntrySplitId[1])
-	ms, err := strconv.Atoi(splitId[0])
-	if err != nil {
-		return encodeError("ERR value is not an integer or out of range")
-	}
-	seq, err := strconv.Atoi(splitId[1])
-	if err != nil {
-		return encodeError("ERR value is not an integer or out of range")
-	}
-	if ms == 0 && seq <= 0 {
-		return encodeError("ERR The ID specified in XADD must be greater than 0-0")
-	}
-	if ms < lastEntryMs || (ms == lastEntryMs && seq <= lastEntrySeq) {
-		return encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
+	if id == "*" {
+		currentMs := time.Now().UnixMilli()
+		if (currentMs < lastEntryMs) {
+			return id, encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
+		}
+		currentSequence := 0
+		if (currentMs == lastEntryMs) {
+			currentSequence = lastEntrySeq + 1
+		}
+		id = strconv.FormatInt(currentMs, 10) + "-" + strconv.Itoa(currentSequence)
+	} else {
+		ms, err := strconv.ParseInt(splitId[0], 10, 64)
+		if err != nil {
+			return id, encodeError("ERR value is not an integer or out of range")
+		}
+		if splitId[1] == "*" {
+			if (ms < lastEntryMs) {
+				return id, encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
+			}
+			currentSequence := 0
+			if (ms == lastEntryMs) {
+				currentSequence = lastEntrySeq + 1
+			}
+			id = strconv.FormatInt(ms, 10) + "-" + strconv.Itoa(currentSequence)
+		} else {
+			seq, err := strconv.Atoi(splitId[1])
+			if err != nil {
+				return id, encodeError("ERR value is not an integer or out of range")
+			}
+			if ms == 0 && seq <= 0 {
+				return id, encodeError("ERR The ID specified in XADD must be greater than 0-0")
+			}
+			if ms < lastEntryMs || (ms == lastEntryMs && seq <= lastEntrySeq) {
+				return id, encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
+			}
+		}
 	}
 
-	return ""
+	return id, ""
 }
 
 func handleXadd(args []string) string {
@@ -403,7 +426,8 @@ func handleXadd(args []string) string {
 		stream = v.Stream
 	}
 	entryId := args[2]
-	if errResp := validateEntryId(stream, entryId); errResp != "" {
+	entryId, errResp := validateEntryId(stream, entryId)
+	if errResp != "" {
 		return errResp
 	}
 	keyValuePairs := args[3:]
