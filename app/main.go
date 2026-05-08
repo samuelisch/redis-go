@@ -357,6 +357,33 @@ func handleType(args []string) string {
 	return encodeSimpleString(kindNames[v.Kind])
 }
 
+func validateEntryId(stream []map[string]string, id string) string {
+	splitId := strings.Split(id, "-")
+	if len(splitId) != 2 {
+		return encodeError("ERR The ID specific in XADD must follow the convention *-*")
+	}
+	lastEntrySplitId := []string{"0", "0"}
+	if len(stream) > 0 {
+		lastEntrySplitId = strings.Split(stream[len(stream) - 1]["id"], "-")
+	}
+
+	lastEntryTime, _ := strconv.Atoi(lastEntrySplitId[0])
+	lastEntrySequence, _ := strconv.Atoi(lastEntrySplitId[1])
+	time, err := strconv.Atoi(splitId[0])
+	sequence, err := strconv.Atoi(splitId[1])
+	if err != nil {
+		return encodeError("ERR value is not an integer or out of range")
+	}
+	if time <= 0 && sequence <= 0 {
+		return encodeError("ERR The ID specified in XADD must be greater than 0-0")
+	}
+	if (time < lastEntryTime) || ( time == lastEntryTime && sequence <= lastEntrySequence) {
+		return encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
+	}
+
+	return "ok"
+}
+
 func handleXadd(args []string) string {
 	// XADD streamKey entryId key value ...(key value)
 	if len(args) < 5 {
@@ -373,6 +400,10 @@ func handleXadd(args []string) string {
 	}
 	stream = v.Stream
 	entryId := args[2]
+	status := validateEntryId(stream, entryId)
+	if status != "ok" {
+		return status
+	}
 	keyValuePairs := args[3:]
 	entry := map[string]string{"id": entryId}
 	for i := 0; i < len(keyValuePairs); i += 2 {
