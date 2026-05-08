@@ -31,6 +31,7 @@ type StoreValue struct {
 	Kind ValueKind
 	S string
 	Slice []string
+	Stream []map[string]string
 }
 var kindNames = map[ValueKind]string {
 	KindString: "string",
@@ -356,6 +357,32 @@ func handleType(args []string) string {
 	return encodeSimpleString(kindNames[v.Kind])
 }
 
+func handleXadd(args []string) string {
+	// XADD streamKey entryId key value ...(key value)
+	if len(args) < 5 {
+		return encodeError("ERR wrong number of arguments for 'xadd' command")
+	}
+
+	streamKey := args[1]
+	v, found := store[streamKey]
+	stream := []map[string]string{}
+	if found {
+		if v.Kind != KindStream {
+			return encodeError("WRONGTYPE Operation against a key holding the wrong kind of value")
+		}
+	}
+	stream = v.Stream
+	entryId := args[2]
+	keyValuePairs := args[3:]
+	entry := map[string]string{"id": entryId}
+	for i := 0; i < len(keyValuePairs); i += 2 {
+		entry[keyValuePairs[i]] = keyValuePairs[i + 1]
+	}
+	stream = append(stream, entry)
+	store[streamKey] = StoreValue{Kind: KindStream, Stream: stream}
+	return encodeBulkString(entryId)
+}
+
 var commandHandlers = map[string]func([]string) string{
 	"PING": handlePing,
 	"ECHO": handleEcho,
@@ -368,6 +395,7 @@ var commandHandlers = map[string]func([]string) string{
 	"LPOP": handleLpop,
 	"BLPOP": handleBlpop,
 	"TYPE": handleType,
+	"XADD": handleXadd,
 }
 
 func handleConn(conn net.Conn) {
