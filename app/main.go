@@ -364,24 +364,27 @@ func validateEntryId(stream []map[string]string, id string) string {
 	}
 	lastEntrySplitId := []string{"0", "0"}
 	if len(stream) > 0 {
-		lastEntrySplitId = strings.Split(stream[len(stream) - 1]["id"], "-")
+		lastEntrySplitId = strings.Split(stream[len(stream)-1]["id"], "-")
 	}
 
-	lastEntryTime, _ := strconv.Atoi(lastEntrySplitId[0])
-	lastEntrySequence, _ := strconv.Atoi(lastEntrySplitId[1])
-	time, err := strconv.Atoi(splitId[0])
-	sequence, err := strconv.Atoi(splitId[1])
+	lastEntryMs, _ := strconv.Atoi(lastEntrySplitId[0])
+	lastEntrySeq, _ := strconv.Atoi(lastEntrySplitId[1])
+	ms, err := strconv.Atoi(splitId[0])
 	if err != nil {
 		return encodeError("ERR value is not an integer or out of range")
 	}
-	if time <= 0 && sequence <= 0 {
+	seq, err := strconv.Atoi(splitId[1])
+	if err != nil {
+		return encodeError("ERR value is not an integer or out of range")
+	}
+	if ms == 0 && seq <= 0 {
 		return encodeError("ERR The ID specified in XADD must be greater than 0-0")
 	}
-	if (time < lastEntryTime) || ( time == lastEntryTime && sequence <= lastEntrySequence) {
+	if ms < lastEntryMs || (ms == lastEntryMs && seq <= lastEntrySeq) {
 		return encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
 	}
 
-	return "ok"
+	return ""
 }
 
 func handleXadd(args []string) string {
@@ -397,17 +400,16 @@ func handleXadd(args []string) string {
 		if v.Kind != KindStream {
 			return encodeError("WRONGTYPE Operation against a key holding the wrong kind of value")
 		}
+		stream = v.Stream
 	}
-	stream = v.Stream
 	entryId := args[2]
-	status := validateEntryId(stream, entryId)
-	if status != "ok" {
-		return status
+	if errResp := validateEntryId(stream, entryId); errResp != "" {
+		return errResp
 	}
 	keyValuePairs := args[3:]
 	entry := map[string]string{"id": entryId}
 	for i := 0; i < len(keyValuePairs); i += 2 {
-		entry[keyValuePairs[i]] = keyValuePairs[i + 1]
+		entry[keyValuePairs[i]] = keyValuePairs[i+1]
 	}
 	stream = append(stream, entry)
 	store[streamKey] = StoreValue{Kind: KindStream, Stream: stream}
