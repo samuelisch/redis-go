@@ -542,7 +542,7 @@ func handleXread(args []string) string {
 	if len(args) != 4 {
 		return encodeError("ERR wrong number of arguments for 'xread' command")
 	}
-	switch args[1] {
+	switch strings.ToUpper(args[1]) {
 	case "STREAMS":
 		// check if sequence is math.MaxInt64, if it is, ms+1, else, sequence+1
 		splitEntryId := strings.Split(args[3], "-")
