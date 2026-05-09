@@ -476,21 +476,29 @@ func handleXrange(args []string) string {
 	}
 	stream := v.Stream
 
-	startMs, startSeqPtr, err := parseEntryId(args[2])
-	if err != nil {
-		return encodeError("ERR value is not an integer or out of range")
-	}
+	startMs := int64(0)
 	startSeq := 0
-	if startSeqPtr != nil {
-		startSeq = *startSeqPtr
+	if args[2] != "-" {
+		parsedStartMs, startSeqPtr, err := parseEntryId(args[2])
+		if err != nil {
+			return encodeError("ERR value is not an integer or out of range")
+		}
+		startMs = parsedStartMs
+		if startSeqPtr != nil {
+			startSeq = *startSeqPtr
+		}
 	}
-	endMs, endSeqPtr, err := parseEntryId(args[3])
-	if err != nil {
-		return encodeError("ERR value is not an integer or out of range")
-	}
+	endMs := int64(math.MaxInt64)
 	endSeq := math.MaxInt64
-	if endSeqPtr != nil {
-		endSeq = *endSeqPtr
+	if args[3] != "+" {
+		parsedEndMs, endSeqPtr, err := parseEntryId(args[3])
+		if err != nil {
+			return encodeError("ERR value is not an integer or out of range")
+		}
+		endMs = parsedEndMs
+		if endSeqPtr != nil {
+			endSeq = *endSeqPtr
+		}
 	}
 
 	var entries []StreamEntry
