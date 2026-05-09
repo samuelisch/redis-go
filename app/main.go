@@ -567,7 +567,7 @@ func handleXread(args []string) string {
 			}
 			queryId := splitEntryId[0] + "-" + strconv.FormatInt(querySequence+1, 10)
 			xRangeRes := handleXrange([]string{"XRANGE", streamKey, queryId, "+"})
-			resp := "*1\r\n*2\r\n" + encodeBulkString(streamKey) + xRangeRes
+			resp := "*2\r\n" + encodeBulkString(streamKey) + xRangeRes
 			queryResResp += resp
 		}
 		return queryResResp
