@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"strconv"
@@ -41,6 +42,10 @@ var kindNames = map[ValueKind]string {
 	KindHash: "hash",
 	KindStream: "stream",
 	KindVectorSet: "vectorset",
+}
+type StreamEntry struct {
+    ID     string
+    Fields string
 }
 
 var store = map[string]StoreValue{}
@@ -357,6 +362,22 @@ func handleType(args []string) string {
 	return encodeSimpleString(kindNames[v.Kind])
 }
 
+func parseEntryId(id string) (ms int64, seq *int, err error) {
+	parts := strings.Split(id, "-")
+	ms, err = strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(parts) == 2 {
+		s, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return 0, nil, err
+		}
+		seq = &s
+	}
+	return ms, seq, nil
+}
+
 func nextSequence(ms, lastMs int64, lastSeq int) int {
 	if ms == lastMs {
 		return lastSeq + 1
@@ -445,6 +466,65 @@ func handleXadd(args []string) string {
 	return encodeBulkString(entryId)
 }
 
+func handleXrange(args []string) string {
+	if len(args) != 4 {
+		return encodeError("ERR wrong number of arguments for 'xadd' command")
+	}
+	v, found := store[args[1]]
+	if !found {
+		return encodeArray([]string{})
+	}
+	stream := v.Stream
+
+	startMs, startSeqPtr, err := parseEntryId(args[2])
+	if err != nil {
+		return encodeError("ERR value is not an integer or out of range")
+	}
+	startSeq := 0
+	if startSeqPtr != nil {
+		startSeq = *startSeqPtr
+	}
+	endMs, endSeqPtr, err := parseEntryId(args[3])
+	if err != nil {
+		return encodeError("ERR value is not an integer or out of range")
+	}
+	endSeq := math.MaxInt64
+	if endSeqPtr != nil {
+		endSeq = *endSeqPtr
+	}
+
+	var entries []StreamEntry
+	for i := 0; i < len(stream); i++ {
+		currentId := stream[i]["id"]
+		currentMs, currentSeqPtr, err := parseEntryId(currentId)
+		if err != nil {
+			return encodeError("ERR current entry id format is wrong")
+		}
+		currentSeq := *currentSeqPtr
+
+		if currentMs > endMs || (currentMs == endMs && currentSeq > endSeq) {
+			break
+		}
+		if currentMs > startMs || (currentMs == startMs && currentSeq >= startSeq) {
+			fields := []string{}
+			for k, v := range stream[i] {
+				if k != "id" {
+					fields = append(fields, k, v)
+				}
+			}
+			entries = append(entries, StreamEntry{ID: currentId, Fields: encodeArray(fields)})
+		}
+	}
+
+	resp := fmt.Sprintf("*%d\r\n", len(entries))
+	for _, entry := range entries {
+		resp += "*2\r\n"
+		resp += encodeBulkString(entry.ID)
+		resp += entry.Fields
+	}
+	return resp
+}
+
 var commandHandlers = map[string]func([]string) string{
 	"PING": handlePing,
 	"ECHO": handleEcho,
@@ -458,6 +538,7 @@ var commandHandlers = map[string]func([]string) string{
 	"BLPOP": handleBlpop,
 	"TYPE": handleType,
 	"XADD": handleXadd,
+	"XRANGE": handleXrange,
 }
 
 func handleConn(conn net.Conn) {
