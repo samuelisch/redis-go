@@ -551,7 +551,7 @@ func handleXread(args []string) string {
 		if len(streamKeys) != len(streamEntryIds) {
 			return encodeError("ERR must have the same number of keys and entry id values")
 		}
-		queryResResp := ""
+		queryResResp := fmt.Sprintf("*%d\r\n", len(streamKeys))
 		for i := 0; i < len(streamKeys); i++ {
 			streamKey := streamKeys[i]
 			streamEntryId := streamEntryIds[i]
