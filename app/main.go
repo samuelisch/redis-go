@@ -539,26 +539,42 @@ func handleXrange(args []string) string {
 }
 
 func handleXread(args []string) string {
-	if len(args) != 4 {
+	if len(args) < 4 {
 		return encodeError("ERR wrong number of arguments for 'xread' command")
 	}
 	switch strings.ToUpper(args[1]) {
 	case "STREAMS":
-		// check if sequence is math.MaxInt64, if it is, ms+1, else, sequence+1
-		splitEntryId := strings.Split(args[3], "-")
-		querySequence, err := strconv.ParseInt(splitEntryId[1], 10, 64)
-		if err != nil {
-			return encodeError("ERR value is not an integer or out of range")
+		streamQueries := args[2:]
+		streamQueriesHalfIndex := len(streamQueries) / 2
+		streamKeys := streamQueries[:streamQueriesHalfIndex]
+		streamEntryIds := streamQueries[streamQueriesHalfIndex:]
+		if len(streamKeys) != len(streamEntryIds) {
+			return encodeError("ERR must have the same number of keys and entry id values")
 		}
-		queryId := splitEntryId[0] + "-" + strconv.FormatInt(querySequence+1, 10)
-		xRangeRes := handleXrange([]string{"XRANGE", args[2], queryId, "+"})
-		resp := "*1\r\n*2\r\n" + encodeBulkString(args[2]) + xRangeRes
-		return resp
+		queryResResp := fmt.Sprintf("*%d\r\n", len(streamKeys))
+		for i := 0; i < len(streamKeys); i++ {
+			streamKey := streamKeys[i]
+			streamEntryId := streamEntryIds[i]
+			splitEntryId := strings.Split(streamEntryId, "-")
+			// account for if no sequence is input
+			querySequence := int64(0)
+			if len(splitEntryId) == 2 {
+				sequenceVal, err := strconv.ParseInt(splitEntryId[1], 10, 64)
+				if err != nil {
+					return encodeError("ERR value is not an integer or out of range")
+				}
+				querySequence = sequenceVal
+			}
+			queryId := splitEntryId[0] + "-" + strconv.FormatInt(querySequence+1, 10)
+			xRangeRes := handleXrange([]string{"XRANGE", streamKey, queryId, "+"})
+			resp := "*1\r\n*2\r\n" + encodeBulkString(streamKey) + xRangeRes
+			queryResResp += resp
+		}
+		fmt.Println(queryResResp)
+		return queryResResp
 	default:
 		return encodeError("ERR wrong type of XREAD entered")
 	}
-	// get xrange of some_key, range of raised id, onwards.
-	// format into proper resp, use output of XRange as the rest, but start with key queried first.
 }
 
 var commandHandlers = map[string]func([]string) string{
