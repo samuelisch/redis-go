@@ -13,12 +13,14 @@ import (
 )
 
 type ExpiryType string
+
 const (
 	ExpiryPX ExpiryType = "PX"
 	ExpiryEX ExpiryType = "EX"
 )
 
 type ValueKind int
+
 const (
 	KindString ValueKind = iota
 	KindStringList
@@ -28,24 +30,27 @@ const (
 	KindStream
 	KindVectorSet
 )
+
 type StoreValue struct {
-	Kind ValueKind
-	S string
-	Slice []string
+	Kind   ValueKind
+	S      string
+	Slice  []string
 	Stream []map[string]string
 }
-var kindNames = map[ValueKind]string {
-	KindString: "string",
+
+var kindNames = map[ValueKind]string{
+	KindString:     "string",
 	KindStringList: "list",
-	KindSet: "set",
-	KindZSet: "zset",
-	KindHash: "hash",
-	KindStream: "stream",
-	KindVectorSet: "vectorset",
+	KindSet:        "set",
+	KindZSet:       "zset",
+	KindHash:       "hash",
+	KindStream:     "stream",
+	KindVectorSet:  "vectorset",
 }
+
 type StreamEntry struct {
-    ID     string
-    Fields string
+	ID     string
+	Fields string
 }
 
 var store = map[string]StoreValue{}
@@ -59,9 +64,9 @@ func setExpiry(expiryType ExpiryType, ttl int64, storedKey string) {
 	}
 	var expiryTime time.Duration
 	if expiryType == "EX" {
-		expiryTime = time.Duration(ttl)*time.Second
+		expiryTime = time.Duration(ttl) * time.Second
 	} else {
-		expiryTime = time.Duration(ttl)*time.Millisecond
+		expiryTime = time.Duration(ttl) * time.Millisecond
 	}
 	time.AfterFunc(expiryTime, func() {
 		delete(store, storedKey)
@@ -399,38 +404,38 @@ func validateEntryId(stream []map[string]string, id string) (string, string) {
 	lastSeq, _ := strconv.Atoi(lastEntrySplitId[1])
 
 	switch {
-		case id == "*":
-			currentMs := time.Now().UnixMilli()
-			if currentMs < lastMs {
-				return id, encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
-			}
-			id = strconv.FormatInt(currentMs, 10) + "-" + strconv.Itoa(nextSequence(currentMs, lastMs, lastSeq))
+	case id == "*":
+		currentMs := time.Now().UnixMilli()
+		if currentMs < lastMs {
+			return id, encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
+		}
+		id = strconv.FormatInt(currentMs, 10) + "-" + strconv.Itoa(nextSequence(currentMs, lastMs, lastSeq))
 
-		case splitId[1] == "*":
-			ms, err := strconv.ParseInt(splitId[0], 10, 64)
-			if err != nil {
-				return id, encodeError("ERR value is not an integer or out of range")
-			}
-			if ms < lastMs {
-				return id, encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
-			}
-			id = strconv.FormatInt(ms, 10) + "-" + strconv.Itoa(nextSequence(ms, lastMs, lastSeq))
+	case splitId[1] == "*":
+		ms, err := strconv.ParseInt(splitId[0], 10, 64)
+		if err != nil {
+			return id, encodeError("ERR value is not an integer or out of range")
+		}
+		if ms < lastMs {
+			return id, encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
+		}
+		id = strconv.FormatInt(ms, 10) + "-" + strconv.Itoa(nextSequence(ms, lastMs, lastSeq))
 
-		default:
-			ms, err := strconv.ParseInt(splitId[0], 10, 64)
-			if err != nil {
-				return id, encodeError("ERR value is not an integer or out of range")
-			}
-			seq, err := strconv.Atoi(splitId[1])
-			if err != nil {
-				return id, encodeError("ERR value is not an integer or out of range")
-			}
-			if ms == 0 && seq <= 0 {
-				return id, encodeError("ERR The ID specified in XADD must be greater than 0-0")
-			}
-			if ms < lastMs || (ms == lastMs && seq <= lastSeq) {
-				return id, encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
-			}
+	default:
+		ms, err := strconv.ParseInt(splitId[0], 10, 64)
+		if err != nil {
+			return id, encodeError("ERR value is not an integer or out of range")
+		}
+		seq, err := strconv.Atoi(splitId[1])
+		if err != nil {
+			return id, encodeError("ERR value is not an integer or out of range")
+		}
+		if ms == 0 && seq <= 0 {
+			return id, encodeError("ERR The ID specified in XADD must be greater than 0-0")
+		}
+		if ms < lastMs || (ms == lastMs && seq <= lastSeq) {
+			return id, encodeError("ERR The ID specified in XADD is equal or smaller than the target stream top item")
+		}
 	}
 
 	return id, ""
@@ -468,7 +473,7 @@ func handleXadd(args []string) string {
 
 func handleXrange(args []string) string {
 	if len(args) != 4 {
-		return encodeError("ERR wrong number of arguments for 'xadd' command")
+		return encodeError("ERR wrong number of arguments for 'xrange' command")
 	}
 	v, found := store[args[1]]
 	if !found {
@@ -533,20 +538,44 @@ func handleXrange(args []string) string {
 	return resp
 }
 
+func handleXread(args []string) string {
+	if len(args) != 4 {
+		return encodeError("ERR wrong number of arguments for 'xread' command")
+	}
+	switch args[1] {
+	case "STREAMS":
+		// check if sequence is math.MaxInt64, if it is, ms+1, else, sequence+1
+		splitEntryId := strings.Split(args[3], "-")
+		querySequence, err := strconv.ParseInt(splitEntryId[1], 10, 64)
+		if err != nil {
+			return encodeError("ERR value is not an integer or out of range")
+		}
+		queryId := splitEntryId[0] + "-" + strconv.FormatInt(querySequence+1, 10)
+		xRangeRes := handleXrange([]string{"XRANGE", args[2], queryId, "+"})
+		resp := "*1\r\n*2\r\n" + encodeBulkString(args[2]) + xRangeRes
+		return resp
+	default:
+		return encodeError("ERR wrong type of XREAD entered")
+	}
+	// get xrange of some_key, range of raised id, onwards.
+	// format into proper resp, use output of XRange as the rest, but start with key queried first.
+}
+
 var commandHandlers = map[string]func([]string) string{
-	"PING": handlePing,
-	"ECHO": handleEcho,
-	"GET": handleGet,
-	"SET": handleSet,
-	"RPUSH": handleRpush,
-	"LPUSH": handleLpush,
-	"LLEN": handleLlen,
+	"PING":   handlePing,
+	"ECHO":   handleEcho,
+	"GET":    handleGet,
+	"SET":    handleSet,
+	"RPUSH":  handleRpush,
+	"LPUSH":  handleLpush,
+	"LLEN":   handleLlen,
 	"LRANGE": handleLrange,
-	"LPOP": handleLpop,
-	"BLPOP": handleBlpop,
-	"TYPE": handleType,
-	"XADD": handleXadd,
+	"LPOP":   handleLpop,
+	"BLPOP":  handleBlpop,
+	"TYPE":   handleType,
+	"XADD":   handleXadd,
 	"XRANGE": handleXrange,
+	"XREAD":  handleXread,
 }
 
 func handleConn(conn net.Conn) {
