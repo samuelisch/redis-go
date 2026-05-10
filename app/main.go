@@ -581,13 +581,6 @@ func handleXrange(args []string) string {
 }
 
 func handleXread(args []string) string {
-	// for (XREAD BLOCK ttl streams key entryId)
-	// follow handleBlpop waiters, block and unblock and channel creation / behaviour
-	// check first, if there's an existing stream which most recent entry id is larger than query entryid
-	// if that exists, we can proceed to find the first entry with id greater than query, and return that.
-	// else
-	// we need to store key and entryId in channel, entry id has to be greater to qualify for return
-	// more logic on returning new data in XADD
 	if len(args) < 4 {
 		return encodeError("ERR syntax error")
 	}
@@ -691,6 +684,25 @@ func handleXread(args []string) string {
 	}
 }
 
+func handleIncr(args []string) string {
+	if len(args) != 2 {
+		return encodeError("ERR syntax error")
+	}
+	key := args[1]
+	v, found := store[key]
+	num := 0
+	if found {
+		numValue, err := strconv.Atoi(v.S)
+		if err != nil {
+			return encodeError("ERR value is not an integer or out of range")
+		}
+		num = numValue
+	}
+	resNum := num + 1
+	store[key] = StoreValue{Kind: KindString, S: strconv.Itoa(resNum)}
+	return encodeInteger(resNum)
+}
+
 var commandHandlers = map[string]func([]string) string{
 	"PING":   handlePing,
 	"ECHO":   handleEcho,
@@ -706,6 +718,7 @@ var commandHandlers = map[string]func([]string) string{
 	"XADD":   handleXadd,
 	"XRANGE": handleXrange,
 	"XREAD":  handleXread,
+	"INCR": handleIncr,
 }
 
 func handleConn(conn net.Conn) {
