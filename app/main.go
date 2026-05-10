@@ -591,7 +591,7 @@ func handleXread(args []string) string {
 	if len(args) < 4 {
 		return encodeError("ERR syntax error")
 	}
-	switch args[1] {
+	switch strings.ToUpper(args[1]) {
 	case "BLOCK":
 		if len(args) != 6 {
 		return encodeError("ERR syntax error")
