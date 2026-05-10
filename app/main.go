@@ -53,9 +53,16 @@ type StreamEntry struct {
 	Fields string
 }
 
+type StreamWaiterEntry struct {
+	ID string
+	Channel chan string
+}
+
 var store = map[string]StoreValue{}
 var waiters = map[string][]chan string{}
 var waitersMu sync.Mutex
+var streamWaiters = map[string][]StreamWaiterEntry{}
+var streamWaitersMu sync.Mutex
 
 func setExpiry(expiryType ExpiryType, ttl int64, storedKey string) {
 	if expiryType != ExpiryPX && expiryType != ExpiryEX {
@@ -441,6 +448,36 @@ func validateEntryId(stream []map[string]string, id string) (string, string) {
 	return id, ""
 }
 
+func checkStreamWaiters(key string, entryId string, stream []map[string]string) []map[string]string {
+	streamWaitersMu.Lock()
+	channelEntries, ok := streamWaiters[key]
+	if !ok || len(channelEntries) == 0 {
+		streamWaitersMu.Unlock()
+		return stream
+	}
+	currMs, currSeqPtr, _ := parseEntryId(entryId)
+	currSeq := *currSeqPtr
+	for _, v := range channelEntries {
+		waiterMs, waiterSeqPtr, _ := parseEntryId(v.ID)
+		waiterSeq := *waiterSeqPtr
+		if currMs > waiterMs || (currMs == waiterMs && currSeq >= waiterSeq) {
+			ch := v.Channel
+			streamWaiters[key] = channelEntries[1:]
+			lastEntry := stream[len(stream)-1]
+			fields := []string{}
+			for k, val := range lastEntry {
+				if k != "id" {
+					fields = append(fields, k, val)
+				}
+			}
+			ch <- encodeStreamEntries([]StreamEntry{{ID: lastEntry["id"], Fields: encodeArray(fields)}})
+			break
+		}
+	}
+	streamWaitersMu.Unlock()
+	return stream
+}
+
 func handleXadd(args []string) string {
 	// XADD streamKey entryId key value ...(key value)
 	if len(args) < 5 {
@@ -467,8 +504,43 @@ func handleXadd(args []string) string {
 		entry[keyValuePairs[i]] = keyValuePairs[i+1]
 	}
 	stream = append(stream, entry)
+	stream = checkStreamWaiters(streamKey, entryId, stream)
 	store[streamKey] = StoreValue{Kind: KindStream, Stream: stream}
 	return encodeBulkString(entryId)
+}
+
+func filterStream(stream []map[string]string, startMs int64, startSeq int, endMs int64, endSeq int) []StreamEntry {
+	var entries []StreamEntry
+	for _, entry := range stream {
+		currentMs, currentSeqPtr, err := parseEntryId(entry["id"])
+		if err != nil {
+			break
+		}
+		currentSeq := *currentSeqPtr
+		if currentMs > endMs || (currentMs == endMs && currentSeq > endSeq) {
+			break
+		}
+		if currentMs > startMs || (currentMs == startMs && currentSeq >= startSeq) {
+			fields := []string{}
+			for k, v := range entry {
+				if k != "id" {
+					fields = append(fields, k, v)
+				}
+			}
+			entries = append(entries, StreamEntry{ID: entry["id"], Fields: encodeArray(fields)})
+		}
+	}
+	return entries
+}
+
+func encodeStreamEntries(entries []StreamEntry) string {
+	resp := fmt.Sprintf("*%d\r\n", len(entries))
+	for _, e := range entries {
+		resp += "*2\r\n"
+		resp += encodeBulkString(e.ID)
+		resp += e.Fields
+	}
+	return resp
 }
 
 func handleXrange(args []string) string {
@@ -479,7 +551,6 @@ func handleXrange(args []string) string {
 	if !found {
 		return encodeArray([]string{})
 	}
-	stream := v.Stream
 
 	startMs := int64(0)
 	startSeq := 0
@@ -506,73 +577,106 @@ func handleXrange(args []string) string {
 		}
 	}
 
-	var entries []StreamEntry
-	for i := 0; i < len(stream); i++ {
-		currentId := stream[i]["id"]
-		currentMs, currentSeqPtr, err := parseEntryId(currentId)
-		if err != nil {
-			return encodeError("ERR current entry id format is wrong")
-		}
-		currentSeq := *currentSeqPtr
-
-		if currentMs > endMs || (currentMs == endMs && currentSeq > endSeq) {
-			break
-		}
-		if currentMs > startMs || (currentMs == startMs && currentSeq >= startSeq) {
-			fields := []string{}
-			for k, v := range stream[i] {
-				if k != "id" {
-					fields = append(fields, k, v)
-				}
-			}
-			entries = append(entries, StreamEntry{ID: currentId, Fields: encodeArray(fields)})
-		}
-	}
-
-	resp := fmt.Sprintf("*%d\r\n", len(entries))
-	for _, entry := range entries {
-		resp += "*2\r\n"
-		resp += encodeBulkString(entry.ID)
-		resp += entry.Fields
-	}
-	return resp
+	return encodeStreamEntries(filterStream(v.Stream, startMs, startSeq, endMs, endSeq))
 }
 
 func handleXread(args []string) string {
+	// for (XREAD BLOCK ttl streams key entryId)
+	// follow handleBlpop waiters, block and unblock and channel creation / behaviour
+	// check first, if there's an existing stream which most recent entry id is larger than query entryid
+	// if that exists, we can proceed to find the first entry with id greater than query, and return that.
+	// else
+	// we need to store key and entryId in channel, entry id has to be greater to qualify for return
+	// more logic on returning new data in XADD
 	if len(args) < 4 {
-		return encodeError("ERR wrong number of arguments for 'xread' command")
+		return encodeError("ERR syntax error")
 	}
-	switch strings.ToUpper(args[1]) {
+	switch args[1] {
+	case "BLOCK":
+		if len(args) != 6 {
+		return encodeError("ERR syntax error")
+	}
+		timeout, _ := strconv.Atoi(args[2])
+		if strings.ToUpper(args[3]) != "STREAMS" {
+			return encodeError("ERR syntax error")
+		}
+		streamKey := args[4]
+		entryId := args[5]
+		ms, seqPtr, err := parseEntryId(entryId)
+		if err != nil {
+			return encodeError("ERR value is not an integer or out of range")
+		}
+		seq := 0
+		if seqPtr != nil {
+			seq = *seqPtr
+		}
+		seq++
+		v, found := store[streamKey]
+		if found && v.Kind == KindStream {
+			entries := filterStream(v.Stream, ms, seq, math.MaxInt64, math.MaxInt64)
+			if len(entries) > 0 {
+				return "*1\r\n*2\r\n" + encodeBulkString(streamKey) + encodeStreamEntries(entries)
+			}
+		}
+
+		ch := make(chan string, 1)
+		streamWaitersMu.Lock()
+		streamWaiters[streamKey] = append(streamWaiters[streamKey], StreamWaiterEntry{ID: entryId, Channel: ch})
+		streamWaitersMu.Unlock()
+
+		if timeout > 0 {
+			expiryTime := time.Duration(timeout * int(time.Millisecond))
+			time.AfterFunc(expiryTime, func() {
+				streamWaitersMu.Lock()
+				chans := streamWaiters[streamKey]
+				for i, c := range chans {
+					if c.Channel == ch {
+						streamWaiters[streamKey] = append(chans[:i], chans[i+1:]...)
+						close(ch)
+						break
+					}
+				}
+				streamWaitersMu.Unlock()
+			})
+		}
+
+		encodedEntry, ok := <-ch
+		if !ok {
+			return encodeNullArray()
+		}
+		return "*1\r\n*2\r\n" + encodeBulkString(streamKey) + encodedEntry
 	case "STREAMS":
 		streamQueries := args[2:]
-		streamQueriesHalfIndex := len(streamQueries) / 2
-		streamKeys := streamQueries[:streamQueriesHalfIndex]
-		streamEntryIds := streamQueries[streamQueriesHalfIndex:]
+		half := len(streamQueries) / 2
+		streamKeys := streamQueries[:half]
+		streamEntryIds := streamQueries[half:]
 		if len(streamKeys) != len(streamEntryIds) {
 			return encodeError("ERR must have the same number of keys and entry id values")
 		}
-		queryResResp := fmt.Sprintf("*%d\r\n", len(streamKeys))
-		for i := 0; i < len(streamKeys); i++ {
-			streamKey := streamKeys[i]
-			streamEntryId := streamEntryIds[i]
-			splitEntryId := strings.Split(streamEntryId, "-")
-			// account for if no sequence is input
-			querySequence := int64(0)
-			if len(splitEntryId) == 2 {
-				sequenceVal, err := strconv.ParseInt(splitEntryId[1], 10, 64)
-				if err != nil {
-					return encodeError("ERR value is not an integer or out of range")
-				}
-				querySequence = sequenceVal
+
+		resp := fmt.Sprintf("*%d\r\n", len(streamKeys))
+		for i, streamKey := range streamKeys {
+			entryId := streamEntryIds[i]
+			ms, seqPtr, err := parseEntryId(entryId)
+			if err != nil {
+				return encodeError("ERR value is not an integer or out of range")
 			}
-			queryId := splitEntryId[0] + "-" + strconv.FormatInt(querySequence+1, 10)
-			xRangeRes := handleXrange([]string{"XRANGE", streamKey, queryId, "+"})
-			resp := "*2\r\n" + encodeBulkString(streamKey) + xRangeRes
-			queryResResp += resp
+			seq := 0
+			if seqPtr != nil {
+				seq = *seqPtr
+			}
+			// XREAD is exclusive of the given ID, so increment seq by 1
+			seq++
+			v, found := store[streamKey]
+			entries := []StreamEntry{}
+			if found && v.Kind == KindStream {
+					entries = filterStream(v.Stream, ms, seq, math.MaxInt64, math.MaxInt64)
+			}
+			resp += "*2\r\n" + encodeBulkString(streamKey) + encodeStreamEntries(entries)
 		}
-		return queryResResp
+		return resp
 	default:
-		return encodeError("ERR wrong type of XREAD entered")
+		return encodeError("ERR syntax error")
 	}
 }
 
