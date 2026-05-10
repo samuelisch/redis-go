@@ -602,6 +602,17 @@ func handleXread(args []string) string {
 		}
 		streamKey := args[4]
 		entryId := args[5]
+		if entryId == "$" {
+			v, found := store[streamKey]
+			if found && v.Kind == KindStream {
+				entries := v.Stream
+				if len(entries) > 0 {
+					entryId = entries[len(entries) - 1]["id"]
+				}
+			} else {
+				entryId = "0-0"
+			}
+		}
 		ms, seqPtr, err := parseEntryId(entryId)
 		if err != nil {
 			return encodeError("ERR value is not an integer or out of range")
