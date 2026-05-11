@@ -799,7 +799,7 @@ func handleConn(conn net.Conn) {
 			conn.Write([]byte(encodeError("ERR unknown command '" + cmd + "'")))
 			continue
 		}
-		if cmd != "MULTI" && cmd != "EXEC" && cmd != "DISCARD" cmd != "WATCH" && client.multiCommands != nil {
+		if cmd != "MULTI" && cmd != "EXEC" && cmd != "DISCARD" && cmd != "WATCH" && client.multiCommands != nil {
 			client.multiCommands = append(client.multiCommands, func() string {
 				return handler(client, args)
 			})
