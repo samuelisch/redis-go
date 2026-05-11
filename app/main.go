@@ -746,6 +746,16 @@ func handleDiscard(c *Client, args []string) string {
 	return encodeSimpleString("OK")
 }
 
+func handleWatch(c *Client, args []string) string {
+	if len(args) != 2 {
+		return encodeError("ERR syntax error")
+	}
+	if c.multiCommands != nil {
+		return encodeError("ERR WATCH inside MULTI is not allowed")
+	}
+	return encodeSimpleString("OK")
+}
+
 var commandHandlers = map[string]func(*Client, []string) string{
 	"PING":    handlePing,
 	"ECHO":    handleEcho,
@@ -765,6 +775,7 @@ var commandHandlers = map[string]func(*Client, []string) string{
 	"MULTI":   handleMulti,
 	"EXEC":    handleExec,
 	"DISCARD": handleDiscard,
+	"WATCH":   handleWatch,
 }
 
 func handleConn(conn net.Conn) {
