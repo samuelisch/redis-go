@@ -727,7 +727,6 @@ func handleExec(c *Client, args []string) string {
 	if c.multiCommands == nil {
 		return encodeError("ERR EXEC without MULTI")
 	}
-	// execute queued commands
 	resp := fmt.Sprintf("*%d\r\n", len(c.multiCommands))
 	for _, queuedCall := range c.multiCommands {
 		resp += queuedCall()
@@ -736,24 +735,36 @@ func handleExec(c *Client, args []string) string {
 	return resp
 }
 
+func handleDiscard(c *Client, args []string) string {
+	if len(args) != 1 {
+		return encodeError("ERR syntax error")
+	}
+	if c.multiCommands == nil {
+		return encodeError("ERR DISCARD without MULTI")
+	}
+	c.multiCommands = nil
+	return encodeSimpleString("OK")
+}
+
 var commandHandlers = map[string]func(*Client, []string) string{
-	"PING":   handlePing,
-	"ECHO":   handleEcho,
-	"GET":    handleGet,
-	"SET":    handleSet,
-	"RPUSH":  handleRpush,
-	"LPUSH":  handleLpush,
-	"LLEN":   handleLlen,
-	"LRANGE": handleLrange,
-	"LPOP":   handleLpop,
-	"BLPOP":  handleBlpop,
-	"TYPE":   handleType,
-	"XADD":   handleXadd,
-	"XRANGE": handleXrange,
-	"XREAD":  handleXread,
-	"INCR":   handleIncr,
-	"MULTI":  handleMulti,
-	"EXEC":   handleExec,
+	"PING":    handlePing,
+	"ECHO":    handleEcho,
+	"GET":     handleGet,
+	"SET":     handleSet,
+	"RPUSH":   handleRpush,
+	"LPUSH":   handleLpush,
+	"LLEN":    handleLlen,
+	"LRANGE":  handleLrange,
+	"LPOP":    handleLpop,
+	"BLPOP":   handleBlpop,
+	"TYPE":    handleType,
+	"XADD":    handleXadd,
+	"XRANGE":  handleXrange,
+	"XREAD":   handleXread,
+	"INCR":    handleIncr,
+	"MULTI":   handleMulti,
+	"EXEC":    handleExec,
+	"DISCARD": handleDiscard,
 }
 
 func handleConn(conn net.Conn) {
@@ -777,7 +788,7 @@ func handleConn(conn net.Conn) {
 			conn.Write([]byte(encodeError("ERR unknown command '" + cmd + "'")))
 			continue
 		}
-		if cmd != "MULTI" && cmd != "EXEC" && client.multiCommands != nil {
+		if cmd != "MULTI" && cmd != "EXEC" && cmd != "DISCARD" && client.multiCommands != nil {
 			client.multiCommands = append(client.multiCommands, func() string {
 				return handler(client, args)
 			})
