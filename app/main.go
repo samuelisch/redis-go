@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+type Client struct {
+	conn          net.Conn
+	multiCommands []func() string
+}
+
 type ExpiryType string
 
 const (
@@ -54,10 +59,11 @@ type StreamEntry struct {
 }
 
 type StreamWaiterEntry struct {
-	ID string
+	ID      string
 	Channel chan string
 }
 
+var multiCommands []func() string
 var store = map[string]StoreValue{}
 var waiters = map[string][]chan string{}
 var waitersMu sync.Mutex
@@ -129,18 +135,18 @@ func encodeNullArray() string {
 	return "*-1\r\n"
 }
 
-func handlePing(args []string) string {
+func handlePing(_ *Client, args []string) string {
 	return encodeSimpleString("PONG")
 }
 
-func handleEcho(args []string) string {
+func handleEcho(_ *Client, args []string) string {
 	if len(args) < 2 {
 		return encodeError("ERR wrong number of arguments for 'echo' command")
 	}
 	return encodeBulkString(args[1])
 }
 
-func handleGet(args []string) string {
+func handleGet(_ *Client, args []string) string {
 	if len(args) < 2 {
 		return encodeError("ERR wrong number of arguments for 'get' command")
 	}
@@ -154,7 +160,7 @@ func handleGet(args []string) string {
 	return encodeBulkString(v.S)
 }
 
-func handleSet(args []string) string {
+func handleSet(_ *Client, args []string) string {
 	if len(args) < 3 {
 		return encodeError("ERR wrong number of arguments for 'set' command")
 	}
@@ -185,7 +191,7 @@ func checkWaiters(key string, list []string) []string {
 	return list
 }
 
-func handleRpush(args []string) string {
+func handleRpush(_ *Client, args []string) string {
 	if len(args) < 3 {
 		return encodeError("ERR wrong number of arguments for 'rpush' command")
 	}
@@ -205,7 +211,7 @@ func handleRpush(args []string) string {
 	return encodeInteger(count)
 }
 
-func handleLpush(args []string) string {
+func handleLpush(_ *Client, args []string) string {
 	if len(args) < 3 {
 		return encodeError("ERR wrong number of arguments for 'lpush' command")
 	}
@@ -227,7 +233,7 @@ func handleLpush(args []string) string {
 	return encodeInteger(count)
 }
 
-func handleLlen(args []string) string {
+func handleLlen(_ *Client, args []string) string {
 	if len(args) != 2 {
 		return encodeError("ERR wrong number of arguments for 'llen' command")
 	}
@@ -238,7 +244,7 @@ func handleLlen(args []string) string {
 	return encodeInteger(len(v.Slice))
 }
 
-func handleLrange(args []string) string {
+func handleLrange(_ *Client, args []string) string {
 	if len(args) != 4 {
 		return encodeError("ERR wrong number of arguments for 'lrange' command")
 	}
@@ -276,7 +282,7 @@ func handleLrange(args []string) string {
 	return encodeArray(list[start : end+1])
 }
 
-func handleLpop(args []string) string {
+func handleLpop(_ *Client, args []string) string {
 	if len(args) < 2 || len(args) > 3 {
 		return encodeError("ERR wrong number of arguments for 'lpop' command")
 	}
@@ -317,7 +323,7 @@ func handleLpop(args []string) string {
 	return encodeBulkString(element)
 }
 
-func handleBlpop(args []string) string {
+func handleBlpop(_ *Client, args []string) string {
 	if len(args) != 3 {
 		return encodeError("ERR wrong number of arguments for 'lpop' command")
 	}
@@ -363,7 +369,7 @@ func handleBlpop(args []string) string {
 	return encodeArray([]string{key, element})
 }
 
-func handleType(args []string) string {
+func handleType(_ *Client, args []string) string {
 	if len(args) != 2 {
 		return encodeError("ERR wrong number of arguments for 'type' command")
 	}
@@ -478,7 +484,7 @@ func checkStreamWaiters(key string, entryId string, stream []map[string]string) 
 	return stream
 }
 
-func handleXadd(args []string) string {
+func handleXadd(_ *Client, args []string) string {
 	// XADD streamKey entryId key value ...(key value)
 	if len(args) < 5 {
 		return encodeError("ERR wrong number of arguments for 'xadd' command")
@@ -543,7 +549,7 @@ func encodeStreamEntries(entries []StreamEntry) string {
 	return resp
 }
 
-func handleXrange(args []string) string {
+func handleXrange(_ *Client, args []string) string {
 	if len(args) != 4 {
 		return encodeError("ERR wrong number of arguments for 'xrange' command")
 	}
@@ -580,15 +586,15 @@ func handleXrange(args []string) string {
 	return encodeStreamEntries(filterStream(v.Stream, startMs, startSeq, endMs, endSeq))
 }
 
-func handleXread(args []string) string {
+func handleXread(_ *Client, args []string) string {
 	if len(args) < 4 {
 		return encodeError("ERR syntax error")
 	}
 	switch strings.ToUpper(args[1]) {
 	case "BLOCK":
 		if len(args) != 6 {
-		return encodeError("ERR syntax error")
-	}
+			return encodeError("ERR syntax error")
+		}
 		timeout, _ := strconv.Atoi(args[2])
 		if strings.ToUpper(args[3]) != "STREAMS" {
 			return encodeError("ERR syntax error")
@@ -600,7 +606,7 @@ func handleXread(args []string) string {
 			if found && v.Kind == KindStream {
 				entries := v.Stream
 				if len(entries) > 0 {
-					entryId = entries[len(entries) - 1]["id"]
+					entryId = entries[len(entries)-1]["id"]
 				}
 			} else {
 				entryId = "0-0"
@@ -674,7 +680,7 @@ func handleXread(args []string) string {
 			v, found := store[streamKey]
 			entries := []StreamEntry{}
 			if found && v.Kind == KindStream {
-					entries = filterStream(v.Stream, ms, seq, math.MaxInt64, math.MaxInt64)
+				entries = filterStream(v.Stream, ms, seq, math.MaxInt64, math.MaxInt64)
 			}
 			resp += "*2\r\n" + encodeBulkString(streamKey) + encodeStreamEntries(entries)
 		}
@@ -684,7 +690,7 @@ func handleXread(args []string) string {
 	}
 }
 
-func handleIncr(args []string) string {
+func handleIncr(_ *Client, args []string) string {
 	if len(args) != 2 {
 		return encodeError("ERR syntax error")
 	}
@@ -703,7 +709,34 @@ func handleIncr(args []string) string {
 	return encodeInteger(resNum)
 }
 
-var commandHandlers = map[string]func([]string) string{
+func handleMulti(c *Client, args []string) string {
+	if len(args) != 1 {
+		return encodeError("ERR syntax error")
+	}
+	if c.multiCommands != nil {
+		return encodeError("ERR MULTI calls can not be nested")
+	}
+	c.multiCommands = []func() string{}
+	return encodeSimpleString("OK")
+}
+
+func handleExec(c *Client, args []string) string {
+	if len(args) != 1 {
+		return encodeError("ERR syntax error")
+	}
+	if c.multiCommands == nil {
+		return encodeError("ERR EXEC without MULTI")
+	}
+	// execute queued commands
+	resp := fmt.Sprintf("*%d\r\n", len(c.multiCommands))
+	for _, queuedCall := range c.multiCommands {
+		resp += queuedCall()
+	}
+	c.multiCommands = nil
+	return resp
+}
+
+var commandHandlers = map[string]func(*Client, []string) string{
 	"PING":   handlePing,
 	"ECHO":   handleEcho,
 	"GET":    handleGet,
@@ -718,11 +751,18 @@ var commandHandlers = map[string]func([]string) string{
 	"XADD":   handleXadd,
 	"XRANGE": handleXrange,
 	"XREAD":  handleXread,
-	"INCR": handleIncr,
+	"INCR":   handleIncr,
+	"MULTI":  handleMulti,
+	"EXEC":   handleExec,
 }
 
 func handleConn(conn net.Conn) {
 	defer conn.Close()
+
+	client := &Client{
+		conn:          conn,
+		multiCommands: nil,
+	}
 
 	reader := bufio.NewReader(conn)
 	for {
@@ -737,7 +777,14 @@ func handleConn(conn net.Conn) {
 			conn.Write([]byte(encodeError("ERR unknown command '" + cmd + "'")))
 			continue
 		}
-		conn.Write([]byte(handler(args)))
+		if cmd != "MULTI" && cmd != "EXEC" && client.multiCommands != nil {
+			client.multiCommands = append(client.multiCommands, func() string {
+				return handler(client, args)
+			})
+			conn.Write([]byte(encodeSimpleString("QUEUED")))
+		} else {
+			conn.Write([]byte(handler(client, args)))
+		}
 	}
 }
 
