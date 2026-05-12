@@ -756,6 +756,7 @@ func handleExec(c *Client, args []string) string {
 		}
 	}
 	c.multiCommands = nil
+	c.watched = nil
 	return resp
 }
 
@@ -787,6 +788,14 @@ func handleWatch(c *Client, args []string) string {
 	return encodeSimpleString("OK")
 }
 
+func handleUnwatch(c *Client, args []string) string {
+	if len(args) != 1 {
+		return encodeError("ERR syntax error")
+	}
+	c.watched = nil
+	return encodeSimpleString("OK")
+}
+
 var commandHandlers = map[string]func(*Client, []string) string{
 	"PING":    handlePing,
 	"ECHO":    handleEcho,
@@ -807,6 +816,7 @@ var commandHandlers = map[string]func(*Client, []string) string{
 	"EXEC":    handleExec,
 	"DISCARD": handleDiscard,
 	"WATCH":   handleWatch,
+	"UNWATCH": handleUnwatch,
 }
 
 func handleConn(conn net.Conn) {
@@ -831,7 +841,7 @@ func handleConn(conn net.Conn) {
 			conn.Write([]byte(encodeError("ERR unknown command '" + cmd + "'")))
 			continue
 		}
-		if cmd != "MULTI" && cmd != "EXEC" && cmd != "DISCARD" && cmd != "WATCH" && client.multiCommands != nil {
+		if cmd != "MULTI" && cmd != "EXEC" && cmd != "DISCARD" && cmd != "WATCH" && cmd!= "UNWATCH" && client.multiCommands != nil {
 			client.multiCommands = append(client.multiCommands, func() string {
 				return handler(client, args)
 			})
