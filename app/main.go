@@ -15,6 +15,7 @@ import (
 type Client struct {
 	conn          net.Conn
 	multiCommands []func() string
+	watched       map[string]uint64
 }
 
 type ExpiryType string
@@ -63,12 +64,14 @@ type StreamWaiterEntry struct {
 	Channel chan string
 }
 
-var multiCommands []func() string
 var store = map[string]StoreValue{}
+var versions = map[string]uint64{}
 var waiters = map[string][]chan string{}
-var waitersMu sync.Mutex
 var streamWaiters = map[string][]StreamWaiterEntry{}
-var streamWaitersMu sync.Mutex
+var storeMu sync.RWMutex
+var versionsMu sync.RWMutex
+var waitersMu sync.RWMutex
+var streamWaitersMu sync.RWMutex
 
 func setExpiry(expiryType ExpiryType, ttl int64, storedKey string) {
 	if expiryType != ExpiryPX && expiryType != ExpiryEX {
@@ -83,7 +86,6 @@ func setExpiry(expiryType ExpiryType, ttl int64, storedKey string) {
 	}
 	time.AfterFunc(expiryTime, func() {
 		delete(store, storedKey)
-		fmt.Println("Expired key: ", storedKey)
 	})
 }
 
@@ -135,6 +137,15 @@ func encodeNullArray() string {
 	return "*-1\r\n"
 }
 
+func setKey(key string, value StoreValue) {
+	storeMu.RLock()
+	versionsMu.Lock()
+	store[key] = value
+	versions[key]++
+	storeMu.RUnlock()
+	versionsMu.Unlock()
+}
+
 func handlePing(_ *Client, args []string) string {
 	return encodeSimpleString("PONG")
 }
@@ -164,7 +175,7 @@ func handleSet(_ *Client, args []string) string {
 	if len(args) < 3 {
 		return encodeError("ERR wrong number of arguments for 'set' command")
 	}
-	store[args[1]] = StoreValue{Kind: KindString, S: args[2]}
+	setKey(args[1], StoreValue{Kind: KindString, S: args[2]})
 	if len(args) >= 5 {
 		timeoutType := strings.ToUpper(args[3])
 		if timeoutType == "PX" || timeoutType == "EX" {
@@ -206,7 +217,7 @@ func handleRpush(_ *Client, args []string) string {
 	list = append(list, args[2:]...)
 	count := len(list)
 	list = checkWaiters(args[1], list)
-	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list}
+	setKey(args[1], StoreValue{Kind: KindStringList, Slice: list})
 
 	return encodeInteger(count)
 }
@@ -228,7 +239,7 @@ func handleLpush(_ *Client, args []string) string {
 	}
 	count := len(list)
 	list = checkWaiters(args[1], list)
-	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list}
+	setKey(args[1], StoreValue{Kind: KindStringList, Slice: list})
 
 	return encodeInteger(count)
 }
@@ -305,7 +316,7 @@ func handleLpop(_ *Client, args []string) string {
 			return encodeError("ERR value is not an integer or out of range")
 		}
 		if numToRemove >= len(list) {
-			store[args[1]] = StoreValue{Kind: KindStringList, Slice: []string{}}
+			setKey(args[1], StoreValue{Kind: KindStringList, Slice: []string{}})
 			return encodeArray(list)
 		}
 		var removed []string
@@ -314,12 +325,12 @@ func handleLpop(_ *Client, args []string) string {
 			removed = append(removed, element)
 			list = list[1:]
 		}
-		store[args[1]] = StoreValue{Kind: KindStringList, Slice: list}
+		setKey(args[1], StoreValue{Kind: KindStringList, Slice: list})
 		return encodeArray(removed)
 	}
 
 	element := list[0]
-	store[args[1]] = StoreValue{Kind: KindStringList, Slice: list[1:]}
+	setKey(args[1], StoreValue{Kind: KindStringList, Slice: list[1:]})
 	return encodeBulkString(element)
 }
 
@@ -336,7 +347,7 @@ func handleBlpop(_ *Client, args []string) string {
 	v, found := store[key]
 	if found && v.Kind == KindStringList && len(v.Slice) > 0 {
 		element := v.Slice[0]
-		store[key] = StoreValue{Kind: KindStringList, Slice: v.Slice[1:]}
+		setKey(key, StoreValue{Kind: KindStringList, Slice: v.Slice[1:]})
 		return encodeArray([]string{key, element})
 	}
 
@@ -511,7 +522,7 @@ func handleXadd(_ *Client, args []string) string {
 	}
 	stream = append(stream, entry)
 	stream = checkStreamWaiters(streamKey, entryId, stream)
-	store[streamKey] = StoreValue{Kind: KindStream, Stream: stream}
+	setKey(streamKey, StoreValue{Kind: KindStream, Stream: stream})
 	return encodeBulkString(entryId)
 }
 
@@ -705,7 +716,7 @@ func handleIncr(_ *Client, args []string) string {
 		num = numValue
 	}
 	resNum := num + 1
-	store[key] = StoreValue{Kind: KindString, S: strconv.Itoa(resNum)}
+	setKey(key, StoreValue{Kind: KindString, S: strconv.Itoa(resNum)})
 	return encodeInteger(resNum)
 }
 
@@ -727,9 +738,22 @@ func handleExec(c *Client, args []string) string {
 	if c.multiCommands == nil {
 		return encodeError("ERR EXEC without MULTI")
 	}
-	resp := fmt.Sprintf("*%d\r\n", len(c.multiCommands))
-	for _, queuedCall := range c.multiCommands {
-		resp += queuedCall()
+	isWatchMutated := false
+	versionsMu.Lock()
+	for key, version := range c.watched {
+		storeVersion := versions[key]
+		if storeVersion != version {
+			isWatchMutated = true
+			break
+		}
+	}
+	versionsMu.Unlock()
+	resp := encodeNullArray()
+	if !isWatchMutated {
+		resp = fmt.Sprintf("*%d\r\n", len(c.multiCommands))
+		for _, queuedCall := range c.multiCommands {
+			resp += queuedCall()
+		}
 	}
 	c.multiCommands = nil
 	return resp
@@ -747,12 +771,19 @@ func handleDiscard(c *Client, args []string) string {
 }
 
 func handleWatch(c *Client, args []string) string {
-	if len(args) != 2 {
+	if len(args) < 2 {
 		return encodeError("ERR syntax error")
 	}
 	if c.multiCommands != nil {
 		return encodeError("ERR WATCH inside MULTI is not allowed")
 	}
+	keys := args[1:]
+	versionsMu.Lock()
+	for _, k := range keys {
+		v := versions[k]
+		c.watched[k] = v
+	}
+	versionsMu.Unlock()
 	return encodeSimpleString("OK")
 }
 
@@ -784,6 +815,7 @@ func handleConn(conn net.Conn) {
 	client := &Client{
 		conn:          conn,
 		multiCommands: nil,
+		watched:       map[string]uint64{},
 	}
 
 	reader := bufio.NewReader(conn)
