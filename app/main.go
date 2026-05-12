@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"flag"
 )
 
 type Client struct {
@@ -854,13 +855,16 @@ func handleConn(conn net.Conn) {
 }
 
 func main() {
-	fmt.Println("Logs from your program will appear here!")
+	port := flag.Int("port", 6379, "Port to listen on")
+	flag.Parse()
 
-	listener, err := net.Listen("tcp", "0.0.0.0:6379")
+	addr := fmt.Sprintf(":%d", *port)
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		fmt.Println("Failed to bind to port 6379")
+		fmt.Println("Failed to bind on %s: %v", addr, err)
 		os.Exit(1)
 	}
+	fmt.Println("Listening on port", addr)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -869,4 +873,5 @@ func main() {
 		}
 		go handleConn(conn)
 	}
+	fmt.Println("Logs from your program will appear here!")
 }
