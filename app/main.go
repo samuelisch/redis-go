@@ -768,6 +768,7 @@ func handleDiscard(c *Client, args []string) string {
 		return encodeError("ERR DISCARD without MULTI")
 	}
 	c.multiCommands = nil
+	c.watched = nil
 	return encodeSimpleString("OK")
 }
 
