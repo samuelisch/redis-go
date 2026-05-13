@@ -808,8 +808,6 @@ func handleInfo(c *Client, args []string) string {
 	output := fmt.Sprintf("role:%s\r\n", c.role)
 	switch c.role {
 	case "master":
-		c.masterReplid = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
-		c.masterReplOffset = 0
 		masterReplid := fmt.Sprintf("master_replid:%s\r\n", c.masterReplid)
 		masterReplOffset := fmt.Sprintf("master_repl_offset:%d\r\n", c.masterReplOffset)
 		output += masterReplid + masterReplOffset
@@ -881,7 +879,9 @@ func handleConn(conn net.Conn, replicaVal string) {
 	defer conn.Close()
 
 	clientRole := "master"
+	masterReplid := "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
 	if replicaVal != "" {
+		masterReplid = ""
 		clientRole = "slave"
 	}
 
@@ -890,7 +890,7 @@ func handleConn(conn net.Conn, replicaVal string) {
 		multiCommands: nil,
 		watched:       map[string]uint64{},
 		role: clientRole,
-		masterReplid: "",
+		masterReplid: masterReplid,
 		masterReplOffset: 0,
 	}
 
