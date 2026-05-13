@@ -817,6 +817,31 @@ func handleInfo(c *Client, args []string) string {
 	return encodeBulkString(output)
 }
 
+func handleReplconf(c *Client, args []string) string {
+	if len(args) < 2 {
+		return encodeError("ERR syntax error")
+	}
+
+	replType := strings.ToLower(args[1])
+
+	switch replType {
+	case "listening-port":
+		if len(args) != 3 {
+			return encodeError("ERR syntax error")
+		}
+		// _ := args[2]
+		return encodeSimpleString("OK")
+	case "capa":
+		if len(args) != 3 {
+			return encodeError("ERR syntax error")
+		}
+		// _ := strings.ToLower(args[2])
+		return encodeSimpleString("OK")
+	default:
+		return encodeError("ERR unknown REPLCONF option")
+	}
+}
+
 var commandHandlers = map[string]func(*Client, []string) string{
 	"PING":    handlePing,
 	"ECHO":    handleEcho,
@@ -839,6 +864,7 @@ var commandHandlers = map[string]func(*Client, []string) string{
 	"WATCH":   handleWatch,
 	"UNWATCH": handleUnwatch,
 	"INFO": handleInfo,
+	"REPLCONF": handleReplconf,
 }
 // get argument whether replica or master
 func handleConn(conn net.Conn, replicaVal string) {
@@ -882,22 +908,98 @@ func handleConn(conn net.Conn, replicaVal string) {
 	}
 }
 
+func sendPing(conn net.Conn, reader *bufio.Reader) error {
+	_, err := conn.Write([]byte(encodeArray([]string{"PING"})))
+
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to write PING: %w", err)
+	}
+	if !strings.HasPrefix(line, "+PONG") {
+		return fmt.Errorf("unexpected PING response: %q", line)
+	}
+	fmt.Println("Master:", strings.TrimSpace(line))
+	return nil
+}
+
+func sendReplconf(conn net.Conn, reader *bufio.Reader, args ...string) error {
+	cmd := append([]string{"REPLCONF"}, args...)
+	_, err := conn.Write([]byte(encodeArray(cmd)))
+	if err !=nil {
+		return fmt.Errorf("write REPLCONF: %w", err)
+	}
+
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read REPLCONF reply: %w", err)
+	}
+	if !strings.HasPrefix(line, "+OK") {
+		return fmt.Errorf("unexpected REPLCONF reply: %q", line)
+	}
+	return nil
+
+}
+
+func startReplicationClient(masterHost string, masterPort string, ownPort string) error {
+	addr := net.JoinHostPort(masterHost, masterPort)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to connect to master %s: %w", addr, err)
+	}
+	fmt.Println("Connected to master instance", addr)
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+
+	err = sendPing(conn, reader)
+	if err != nil {
+		return err
+	}
+	err = sendReplconf(conn, reader, "listening-port", ownPort)
+	if err != nil {
+		return err
+	}
+	err = sendReplconf(conn, reader, "capa", "psync2"); 
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func main() {
 	port := flag.Int("port", 6379, "Port to listen on")
 	replicaOf := flag.String("replicaof", "", "Define which host and port to replicate")
 	flag.Parse()
 
-	addr := fmt.Sprintf(":%d", *port)
+	ownPort := fmt.Sprintf("%d", *port)
+	addr := ":" + ownPort
 	replicaVal := fmt.Sprintf("%s", *replicaOf)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		fmt.Println("Failed to bind on %s: %v", addr, err)
+		fmt.Println("Failed to bind on %s: %v", ownPort, err)
 		os.Exit(1)
 	}
-	fmt.Println("Listening on port", addr)
+	fmt.Println("Listening on port", ownPort)
 	if replicaVal != "" {
-		fmt.Println("Replicating", replicaVal)
+		fmt.Println("Replicating from", replicaVal)
+		parts := strings.Split(replicaVal, " ")
+		if len(parts) != 2 {
+			fmt.Println("replicaof must be: host port")
+			os.Exit(1)
+		}
+		masterHost := parts[0]
+		masterPort := parts[1]
+
+		go func() {
+			err := startReplicationClient(masterHost, masterPort, ownPort)
+			if err != nil {
+				fmt.Println("Replication client error:", err)
+			}
+		}()
 	}
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -907,5 +1009,4 @@ func main() {
 		// pass in whether replica or master
 		go handleConn(conn, replicaVal)
 	}
-	fmt.Println("Logs from your program will appear here!")
 }
