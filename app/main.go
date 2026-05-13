@@ -803,7 +803,7 @@ func handleInfo(c *Client, args []string) string {
 	if len(args) != 2 {
 		return encodeError("ERR syntax error")
 	}
-	output := fmt.Sprintf("role: %s\r\n", c.role)
+	output := fmt.Sprintf("role:%s\r\n", c.role)
 	return encodeBulkString(output)
 }
 
