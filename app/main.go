@@ -845,7 +845,7 @@ func handlePsync(c *Client, args []string) string {
 		return encodeError("ERR syntax error")
 	}
 
-	resString := "FULLRESYNC" + c.masterReplid + strconv.Itoa(c.masterReplOffset)
+	resString := "FULLRESYNC " + c.masterReplid + " " + strconv.Itoa(c.masterReplOffset)
 	return encodeSimpleString(resString)
 }
 
