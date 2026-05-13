@@ -17,6 +17,7 @@ type Client struct {
 	conn          net.Conn
 	multiCommands []func() string
 	watched       map[string]uint64
+	role string
 }
 
 type ExpiryType string
@@ -798,6 +799,14 @@ func handleUnwatch(c *Client, args []string) string {
 	return encodeSimpleString("OK")
 }
 
+func handleInfo(c *Client, args []string) string {
+	if len(args) != 2 {
+		return encodeError("ERR syntax error")
+	}
+	output := fmt.Sprintf("role: %s\r\n", c.role)
+	return encodeBulkString(output)
+}
+
 var commandHandlers = map[string]func(*Client, []string) string{
 	"PING":    handlePing,
 	"ECHO":    handleEcho,
@@ -819,15 +828,23 @@ var commandHandlers = map[string]func(*Client, []string) string{
 	"DISCARD": handleDiscard,
 	"WATCH":   handleWatch,
 	"UNWATCH": handleUnwatch,
+	"INFO": handleInfo,
 }
-
-func handleConn(conn net.Conn) {
+// get argument whether replica or master
+func handleConn(conn net.Conn, replicaVal string) {
 	defer conn.Close()
+
+	clientRole := "master"
+	fmt.Println(replicaVal)
+	if replicaVal != "" {
+		clientRole = "slave"
+	}
 
 	client := &Client{
 		conn:          conn,
 		multiCommands: nil,
 		watched:       map[string]uint64{},
+		role: clientRole,
 	}
 
 	reader := bufio.NewReader(conn)
@@ -856,22 +873,28 @@ func handleConn(conn net.Conn) {
 
 func main() {
 	port := flag.Int("port", 6379, "Port to listen on")
+	replicaOf := flag.String("replicaof", "", "Define which host and port to replicate")
 	flag.Parse()
 
 	addr := fmt.Sprintf(":%d", *port)
+	replicaVal := fmt.Sprintf("%s", *replicaOf)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		fmt.Println("Failed to bind on %s: %v", addr, err)
 		os.Exit(1)
 	}
 	fmt.Println("Listening on port", addr)
+	if replicaVal != "" {
+		fmt.Println("Replicating", replicaVal)
+	}
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Println("Error accepting connection: ", err.Error())
 			os.Exit(1)
 		}
-		go handleConn(conn)
+		// pass in whether replica or master
+		go handleConn(conn, replicaVal)
 	}
 	fmt.Println("Logs from your program will appear here!")
 }
