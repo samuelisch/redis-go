@@ -18,6 +18,8 @@ type Client struct {
 	multiCommands []func() string
 	watched       map[string]uint64
 	role string
+	masterReplid string
+	masterReplOffset int
 }
 
 type ExpiryType string
@@ -804,6 +806,14 @@ func handleInfo(c *Client, args []string) string {
 		return encodeError("ERR syntax error")
 	}
 	output := fmt.Sprintf("role:%s\r\n", c.role)
+	switch c.role {
+	case "master":
+		c.masterReplid = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+		c.masterReplOffset = 0
+		masterReplid := fmt.Sprintf("master_replid:%s\r\n", c.masterReplid)
+		masterReplOffset := fmt.Sprintf("master_repl_offset:%d\r\n", c.masterReplOffset)
+		output += masterReplid + masterReplOffset
+	}
 	return encodeBulkString(output)
 }
 
@@ -835,7 +845,6 @@ func handleConn(conn net.Conn, replicaVal string) {
 	defer conn.Close()
 
 	clientRole := "master"
-	fmt.Println(replicaVal)
 	if replicaVal != "" {
 		clientRole = "slave"
 	}
@@ -845,6 +854,8 @@ func handleConn(conn net.Conn, replicaVal string) {
 		multiCommands: nil,
 		watched:       map[string]uint64{},
 		role: clientRole,
+		masterReplid: "",
+		masterReplOffset: 0,
 	}
 
 	reader := bufio.NewReader(conn)
