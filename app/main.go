@@ -842,6 +842,15 @@ func handleReplconf(c *Client, args []string) string {
 	}
 }
 
+func handlePsync(c *Client, args []string) string {
+	if len(args) != 3 {
+		return encodeError("ERR syntax error")
+	}
+
+	resString := "FULLRESYNC" + c.masterReplid + strconv.Itoa(c.masterReplOffset)
+	return encodeSimpleString(resString)
+}
+
 var commandHandlers = map[string]func(*Client, []string) string{
 	"PING":    handlePing,
 	"ECHO":    handleEcho,
@@ -865,6 +874,7 @@ var commandHandlers = map[string]func(*Client, []string) string{
 	"UNWATCH": handleUnwatch,
 	"INFO": handleInfo,
 	"REPLCONF": handleReplconf,
+	"PSYNC": handlePsync,
 }
 // get argument whether replica or master
 func handleConn(conn net.Conn, replicaVal string) {
@@ -937,7 +947,15 @@ func sendReplconf(conn net.Conn, reader *bufio.Reader, args ...string) error {
 		return fmt.Errorf("unexpected REPLCONF reply: %q", line)
 	}
 	return nil
+}
 
+func sendPsync(conn net.Conn, reader *bufio.Reader) error {
+	cmd := append([]string{"PSYNC", "?", "-1"})
+	_, err := conn.Write([]byte(encodeArray(cmd)))
+	if err !=nil {
+		return fmt.Errorf("write PSYNC: %w", err)
+	}
+	return nil
 }
 
 func startReplicationClient(masterHost string, masterPort string, ownPort string) error {
@@ -960,7 +978,11 @@ func startReplicationClient(masterHost string, masterPort string, ownPort string
 	if err != nil {
 		return err
 	}
-	err = sendReplconf(conn, reader, "capa", "psync2"); 
+	err = sendReplconf(conn, reader, "capa", "psync2")
+	if err != nil {
+		return err
+	}
+	err = sendPsync(conn, reader)
 	if err != nil {
 		return err
 	}
