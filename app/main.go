@@ -2,7 +2,10 @@ package main
 
 import (
 	"bufio"
+	"encoding/hex"
+	"flag"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -10,16 +13,13 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"flag"
 )
 
 type Client struct {
 	conn          net.Conn
 	multiCommands []func() string
 	watched       map[string]uint64
-	role string
-	masterReplid string
-	masterReplOffset int
+	role          string
 }
 
 type ExpiryType string
@@ -76,6 +76,45 @@ var storeMu sync.RWMutex
 var versionsMu sync.RWMutex
 var waitersMu sync.RWMutex
 var streamWaitersMu sync.RWMutex
+
+const emptyRDBHex = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2"
+
+type ReplicaConn struct {
+	writer *bufio.Writer
+}
+
+type ReplicationManager struct {
+	mu       sync.Mutex
+	replid   string
+	offset   int
+	replicas []*ReplicaConn
+}
+
+func (r *ReplicationManager) addReplica(conn net.Conn) *ReplicaConn {
+	rc := &ReplicaConn{writer: bufio.NewWriter(conn)}
+	r.mu.Lock()
+	r.replicas = append(r.replicas, rc)
+	r.mu.Unlock()
+	return rc
+}
+
+func (r *ReplicationManager) propagate(args []string) {
+	encoded := encodeArray(args)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.offset += len(encoded)
+	alive := r.replicas[:0]
+	for _, replica := range r.replicas {
+		_, err1 := replica.writer.WriteString(encoded)
+		err2 := replica.writer.Flush()
+		if err1 == nil && err2 == nil {
+			alive = append(alive, replica)
+		}
+	}
+	r.replicas = alive
+}
+
+var repl *ReplicationManager
 
 func setExpiry(expiryType ExpiryType, ttl int64, storedKey string) {
 	if expiryType != ExpiryPX && expiryType != ExpiryEX {
@@ -142,11 +181,11 @@ func encodeNullArray() string {
 }
 
 func setKey(key string, value StoreValue) {
-	storeMu.RLock()
+	storeMu.Lock()
 	versionsMu.Lock()
 	store[key] = value
 	versions[key]++
-	storeMu.RUnlock()
+	storeMu.Unlock()
 	versionsMu.Unlock()
 }
 
@@ -187,6 +226,7 @@ func handleSet(_ *Client, args []string) string {
 			setExpiry(ExpiryType(timeoutType), expiryValue, args[1])
 		}
 	}
+	repl.propagate(args)
 	return encodeSimpleString("OK")
 }
 
@@ -222,7 +262,7 @@ func handleRpush(_ *Client, args []string) string {
 	count := len(list)
 	list = checkWaiters(args[1], list)
 	setKey(args[1], StoreValue{Kind: KindStringList, Slice: list})
-
+	repl.propagate(args)
 	return encodeInteger(count)
 }
 
@@ -244,7 +284,7 @@ func handleLpush(_ *Client, args []string) string {
 	count := len(list)
 	list = checkWaiters(args[1], list)
 	setKey(args[1], StoreValue{Kind: KindStringList, Slice: list})
-
+	repl.propagate(args)
 	return encodeInteger(count)
 }
 
@@ -321,6 +361,7 @@ func handleLpop(_ *Client, args []string) string {
 		}
 		if numToRemove >= len(list) {
 			setKey(args[1], StoreValue{Kind: KindStringList, Slice: []string{}})
+			repl.propagate(args)
 			return encodeArray(list)
 		}
 		var removed []string
@@ -330,11 +371,13 @@ func handleLpop(_ *Client, args []string) string {
 			list = list[1:]
 		}
 		setKey(args[1], StoreValue{Kind: KindStringList, Slice: list})
+		repl.propagate(args)
 		return encodeArray(removed)
 	}
 
 	element := list[0]
 	setKey(args[1], StoreValue{Kind: KindStringList, Slice: list[1:]})
+	repl.propagate(args)
 	return encodeBulkString(element)
 }
 
@@ -527,6 +570,7 @@ func handleXadd(_ *Client, args []string) string {
 	stream = append(stream, entry)
 	stream = checkStreamWaiters(streamKey, entryId, stream)
 	setKey(streamKey, StoreValue{Kind: KindStream, Stream: stream})
+	repl.propagate(args)
 	return encodeBulkString(entryId)
 }
 
@@ -721,6 +765,7 @@ func handleIncr(_ *Client, args []string) string {
 	}
 	resNum := num + 1
 	setKey(key, StoreValue{Kind: KindString, S: strconv.Itoa(resNum)})
+	repl.propagate(args)
 	return encodeInteger(resNum)
 }
 
@@ -806,11 +851,9 @@ func handleInfo(c *Client, args []string) string {
 		return encodeError("ERR syntax error")
 	}
 	output := fmt.Sprintf("role:%s\r\n", c.role)
-	switch c.role {
-	case "master":
-		masterReplid := fmt.Sprintf("master_replid:%s\r\n", c.masterReplid)
-		masterReplOffset := fmt.Sprintf("master_repl_offset:%d\r\n", c.masterReplOffset)
-		output += masterReplid + masterReplOffset
+	if c.role == "master" {
+		output += fmt.Sprintf("master_replid:%s\r\n", repl.replid)
+		output += fmt.Sprintf("master_repl_offset:%d\r\n", repl.offset)
 	}
 	return encodeBulkString(output)
 }
@@ -845,8 +888,15 @@ func handlePsync(c *Client, args []string) string {
 		return encodeError("ERR syntax error")
 	}
 
-	resString := "FULLRESYNC " + c.masterReplid + " " + strconv.Itoa(c.masterReplOffset)
-	return encodeSimpleString(resString)
+	resString := "FULLRESYNC " + repl.replid + " " + strconv.Itoa(repl.offset)
+	c.conn.Write([]byte(encodeSimpleString(resString)))
+
+	rdbBytes, _ := hex.DecodeString(emptyRDBHex)
+	c.conn.Write([]byte(fmt.Sprintf("$%d\r\n", len(rdbBytes))))
+	c.conn.Write(rdbBytes)
+
+	repl.addReplica(c.conn)
+	return ""
 }
 
 var commandHandlers = map[string]func(*Client, []string) string{
@@ -874,14 +924,9 @@ var commandHandlers = map[string]func(*Client, []string) string{
 	"REPLCONF": handleReplconf,
 	"PSYNC": handlePsync,
 }
-// get argument whether replica or master
 func handleConn(conn net.Conn, replicaVal string) {
-	defer conn.Close()
-
 	clientRole := "master"
-	masterReplid := "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
 	if replicaVal != "" {
-		masterReplid = ""
 		clientRole = "slave"
 	}
 
@@ -889,10 +934,15 @@ func handleConn(conn net.Conn, replicaVal string) {
 		conn:          conn,
 		multiCommands: nil,
 		watched:       map[string]uint64{},
-		role: clientRole,
-		masterReplid: masterReplid,
-		masterReplOffset: 0,
+		role:          clientRole,
 	}
+
+	transferred := false
+	defer func() {
+		if !transferred {
+			conn.Close()
+		}
+	}()
 
 	reader := bufio.NewReader(conn)
 	for {
@@ -907,13 +957,17 @@ func handleConn(conn net.Conn, replicaVal string) {
 			conn.Write([]byte(encodeError("ERR unknown command '" + cmd + "'")))
 			continue
 		}
-		if cmd != "MULTI" && cmd != "EXEC" && cmd != "DISCARD" && cmd != "WATCH" && cmd!= "UNWATCH" && client.multiCommands != nil {
+		if cmd != "MULTI" && cmd != "EXEC" && cmd != "DISCARD" && cmd != "WATCH" && cmd != "UNWATCH" && client.multiCommands != nil {
 			client.multiCommands = append(client.multiCommands, func() string {
 				return handler(client, args)
 			})
 			conn.Write([]byte(encodeSimpleString("QUEUED")))
 		} else {
 			conn.Write([]byte(handler(client, args)))
+		}
+		if cmd == "PSYNC" {
+			transferred = true
+			return
 		}
 	}
 }
@@ -935,7 +989,7 @@ func sendPing(conn net.Conn, reader *bufio.Reader) error {
 func sendReplconf(conn net.Conn, reader *bufio.Reader, args ...string) error {
 	cmd := append([]string{"REPLCONF"}, args...)
 	_, err := conn.Write([]byte(encodeArray(cmd)))
-	if err !=nil {
+	if err != nil {
 		return fmt.Errorf("write REPLCONF: %w", err)
 	}
 
@@ -952,7 +1006,7 @@ func sendReplconf(conn net.Conn, reader *bufio.Reader, args ...string) error {
 func sendPsync(conn net.Conn, reader *bufio.Reader) error {
 	cmd := append([]string{"PSYNC", "?", "-1"})
 	_, err := conn.Write([]byte(encodeArray(cmd)))
-	if err !=nil {
+	if err != nil {
 		return fmt.Errorf("write PSYNC: %w", err)
 	}
 	return nil
@@ -966,34 +1020,81 @@ func startReplicationClient(masterHost string, masterPort string, ownPort string
 		return fmt.Errorf("failed to connect to master %s: %w", addr, err)
 	}
 	fmt.Println("Connected to master instance", addr)
-	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
 
-	err = sendPing(conn, reader)
-	if err != nil {
+	if err = sendPing(conn, reader); err != nil {
+		conn.Close()
 		return err
 	}
-	err = sendReplconf(conn, reader, "listening-port", ownPort)
-	if err != nil {
+	if err = sendReplconf(conn, reader, "listening-port", ownPort); err != nil {
+		conn.Close()
 		return err
 	}
-	err = sendReplconf(conn, reader, "capa", "psync2")
-	if err != nil {
+	if err = sendReplconf(conn, reader, "capa", "psync2"); err != nil {
+		conn.Close()
 		return err
 	}
-	err = sendPsync(conn, reader)
-	if err != nil {
+	if err = sendPsync(conn, reader); err != nil {
+		conn.Close()
 		return err
 	}
 
-	return nil
+	// Read FULLRESYNC <replid> <offset>
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("read FULLRESYNC: %w", err)
+	}
+	if !strings.HasPrefix(line, "+FULLRESYNC") {
+		conn.Close()
+		return fmt.Errorf("unexpected PSYNC response: %q", line)
+	}
+	fmt.Println("Received:", strings.TrimSpace(line))
+
+	// Read RDB: $<len>\r\n<bytes>  (no trailing \r\n after bytes)
+	line, err = reader.ReadString('\n')
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("read RDB header: %w", err)
+	}
+	rdbLen, err := strconv.Atoi(strings.TrimSpace(line[1:]))
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("parse RDB length: %w", err)
+	}
+	if _, err = io.ReadFull(reader, make([]byte, rdbLen)); err != nil {
+		conn.Close()
+		return fmt.Errorf("read RDB body: %w", err)
+	}
+	fmt.Printf("Loaded RDB snapshot (%d bytes)\n", rdbLen)
+
+	// Receive and apply write commands from master indefinitely
+	replicaClient := &Client{conn: conn, watched: map[string]uint64{}, role: "slave"}
+	var offset int
+	for {
+		args, err := parseCommand(reader)
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("replication stream ended: %w", err)
+		}
+		cmd := strings.ToUpper(args[0])
+		if handler, ok := commandHandlers[cmd]; ok {
+			handler(replicaClient, args)
+		}
+		offset += len(encodeArray(args))
+		conn.Write([]byte(encodeArray([]string{"REPLCONF", "ACK", strconv.Itoa(offset)})))
+	}
 }
 
 func main() {
 	port := flag.Int("port", 6379, "Port to listen on")
 	replicaOf := flag.String("replicaof", "", "Define which host and port to replicate")
 	flag.Parse()
+
+	repl = &ReplicationManager{
+		replid: "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb",
+	}
 
 	ownPort := fmt.Sprintf("%d", *port)
 	addr := ":" + ownPort
