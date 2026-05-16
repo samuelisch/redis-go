@@ -1079,14 +1079,17 @@ func startReplicationClient(masterHost string, masterPort string, ownPort string
 			return fmt.Errorf("replication stream ended: %w", err)
 		}
 		cmd := strings.ToUpper(args[0])
+		encoded := encodeArray(args)
 		if handler, ok := commandHandlers[cmd]; ok {
-			resp := handler(replicaClient, args)
-			if cmd == "REPLCONF" && resp != "" {
-				conn.Write([]byte(resp))
+			if cmd == "REPLCONF" {
+				if resp := handler(replicaClient, args); resp != "" {
+					conn.Write([]byte(resp))
+				}
+				replicaClient.replOffset += len(encoded)
+			} else {
+				replicaClient.replOffset += len(encoded)
+				handler(replicaClient, args)
 			}
-		}
-		if cmd != "REPLCONF" {
-			replicaClient.replOffset += len(encodeArray(args))
 		}
 	}
 }
