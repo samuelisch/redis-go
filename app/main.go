@@ -901,7 +901,7 @@ func handlePsync(c *Client, args []string) string {
 }
 
 func handleWait(c *Client, args []string) string {
-	return encodeInteger(0)
+	return encodeInteger(len(repl.replicas))
 }
 
 var commandHandlers = map[string]func(*Client, []string) string{
