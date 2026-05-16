@@ -1080,7 +1080,8 @@ func startReplicationClient(masterHost string, masterPort string, ownPort string
 		}
 		cmd := strings.ToUpper(args[0])
 		if handler, ok := commandHandlers[cmd]; ok {
-			if resp := handler(replicaClient, args); resp != "" {
+			resp := handler(replicaClient, args)
+			if cmd == "REPLCONF" && resp != "" {
 				conn.Write([]byte(resp))
 			}
 		}
