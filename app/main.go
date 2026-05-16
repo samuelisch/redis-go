@@ -900,6 +900,10 @@ func handlePsync(c *Client, args []string) string {
 	return ""
 }
 
+func handleWait(c *Client, args []string) string {
+	return encodeInteger(0)
+}
+
 var commandHandlers = map[string]func(*Client, []string) string{
 	"PING":    handlePing,
 	"ECHO":    handleEcho,
@@ -924,6 +928,7 @@ var commandHandlers = map[string]func(*Client, []string) string{
 	"INFO": handleInfo,
 	"REPLCONF": handleReplconf,
 	"PSYNC": handlePsync,
+	"WAIT": handleWait,
 }
 func handleConn(conn net.Conn, replicaVal string) {
 	clientRole := "master"
