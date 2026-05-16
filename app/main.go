@@ -20,6 +20,7 @@ type Client struct {
 	multiCommands []func() string
 	watched       map[string]uint64
 	role          string
+	replOffset    int
 }
 
 type ExpiryType string
@@ -870,14 +871,14 @@ func handleReplconf(c *Client, args []string) string {
 		if len(args) != 3 {
 			return encodeError("ERR syntax error")
 		}
-		// _ := args[2]
 		return encodeSimpleString("OK")
 	case "capa":
 		if len(args) != 3 {
 			return encodeError("ERR syntax error")
 		}
-		// _ := strings.ToLower(args[2])
 		return encodeSimpleString("OK")
+	case "getack":
+		return encodeArray([]string{"REPLCONF", "ACK", strconv.Itoa(c.replOffset)})
 	default:
 		return encodeError("ERR unknown REPLCONF option")
 	}
@@ -1071,19 +1072,19 @@ func startReplicationClient(masterHost string, masterPort string, ownPort string
 
 	// Receive and apply write commands from master indefinitely
 	replicaClient := &Client{conn: conn, watched: map[string]uint64{}, role: "slave"}
-	var offset int
 	for {
 		args, err := parseCommand(reader)
 		if err != nil {
 			conn.Close()
 			return fmt.Errorf("replication stream ended: %w", err)
 		}
+		replicaClient.replOffset += len(encodeArray(args))
 		cmd := strings.ToUpper(args[0])
 		if handler, ok := commandHandlers[cmd]; ok {
-			handler(replicaClient, args)
+			if resp := handler(replicaClient, args); resp != "" {
+				conn.Write([]byte(resp))
+			}
 		}
-		offset += len(encodeArray(args))
-		conn.Write([]byte(encodeArray([]string{"REPLCONF", "ACK", strconv.Itoa(offset)})))
 	}
 }
 
