@@ -34,7 +34,7 @@ func (r *ReplicationManager) addReplica(conn net.Conn) *ReplicaConn {
 	r.replicas = append(r.replicas, rc)
 	r.mu.Unlock()
 
-	go rc.readLoop()
+	go rc.readLoop(r)
 	return rc
 }
 
@@ -64,7 +64,7 @@ func (r *ReplicationManager) sendGetAck() {
 	}
 }
 
-func (rc *ReplicaConn) readLoop() {
+func (rc *ReplicaConn) readLoop(r *ReplicationManager) {
 	for {
 		args, err := parseCommand(rc.reader)
 		if err != nil {
@@ -73,15 +73,13 @@ func (rc *ReplicaConn) readLoop() {
 		if len(args) == 3 && strings.ToUpper(args[0]) == "REPLCONF" && strings.ToUpper(args[1]) == "ACK" {
 			offset, err := strconv.Atoi(args[2])
 			if err == nil {
-				repl.mu.Lock()
+				r.mu.Lock()
 				rc.knownOffset = offset
-				repl.mu.Unlock()
+				r.mu.Unlock()
 			}
 		}
 	}
 }
-
-var repl *ReplicationManager
 
 func sendPing(conn net.Conn, reader *bufio.Reader) error {
 	_, err := conn.Write([]byte(encodeArray([]string{"PING"})))
@@ -123,7 +121,7 @@ func sendPsync(conn net.Conn, reader *bufio.Reader) error {
 	return nil
 }
 
-func startReplicationClient(masterHost string, masterPort string, ownPort string) error {
+func startReplicationClient(server *Server, masterHost string, masterPort string, ownPort string) error {
 	addr := net.JoinHostPort(masterHost, masterPort)
 
 	conn, err := net.Dial("tcp", addr)
@@ -178,7 +176,7 @@ func startReplicationClient(masterHost string, masterPort string, ownPort string
 	}
 	fmt.Printf("Loaded RDB snapshot (%d bytes)\n", rdbLen)
 
-	replicaClient := &Client{conn: conn, watched: map[string]uint64{}, role: "slave"}
+	replicaClient := &Client{conn: conn, watched: map[string]uint64{}}
 	for {
 		args, err := parseCommand(reader)
 		if err != nil {
@@ -189,13 +187,13 @@ func startReplicationClient(masterHost string, masterPort string, ownPort string
 		encoded := encodeArray(args)
 		if handler, ok := commandHandlers[cmd]; ok {
 			if cmd == "REPLCONF" {
-				if resp := handler(replicaClient, args); resp != "" {
+				if resp := handler(server, replicaClient, args); resp != "" {
 					conn.Write([]byte(resp))
 				}
 				replicaClient.replOffset += len(encoded)
 			} else {
 				replicaClient.replOffset += len(encoded)
-				handler(replicaClient, args)
+				handler(server, replicaClient, args)
 			}
 		}
 	}

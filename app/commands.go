@@ -9,22 +9,22 @@ import (
 	"time"
 )
 
-func handlePing(_ *Client, args []string) string {
+func handlePing(server *Server, client *Client, args []string) string {
 	return encodeSimpleString("PONG")
 }
 
-func handleEcho(_ *Client, args []string) string {
+func handleEcho(server *Server, client *Client, args []string) string {
 	if len(args) < 2 {
 		return encodeError("ERR wrong number of arguments for 'echo' command")
 	}
 	return encodeBulkString(args[1])
 }
 
-func handleGet(_ *Client, args []string) string {
+func handleGet(server *Server, client *Client, args []string) string {
 	if len(args) < 2 {
 		return encodeError("ERR wrong number of arguments for 'get' command")
 	}
-	v, found := store[args[1]]
+	v, found := server.store.get(args[1])
 	if !found {
 		return encodeNullBulk()
 	}
@@ -34,27 +34,27 @@ func handleGet(_ *Client, args []string) string {
 	return encodeBulkString(v.S)
 }
 
-func handleSet(_ *Client, args []string) string {
+func handleSet(server *Server, client *Client, args []string) string {
 	if len(args) < 3 {
 		return encodeError("ERR wrong number of arguments for 'set' command")
 	}
-	setKey(args[1], StoreValue{Kind: KindString, S: args[2]})
+	server.store.set(args[1], StoreValue{Kind: KindString, S: args[2]})
 	if len(args) >= 5 {
 		timeoutType := strings.ToUpper(args[3])
 		if timeoutType == "PX" || timeoutType == "EX" {
 			expiryValue, _ := strconv.ParseInt(args[4], 10, 64)
-			setExpiry(ExpiryType(timeoutType), expiryValue, args[1])
+			server.store.setExpiry(ExpiryType(timeoutType), expiryValue, args[1])
 		}
 	}
-	repl.propagate(args)
+	server.repl.propagate(args)
 	return encodeSimpleString("OK")
 }
 
-func handleRpush(_ *Client, args []string) string {
+func handleRpush(server *Server, client *Client, args []string) string {
 	if len(args) < 3 {
 		return encodeError("ERR wrong number of arguments for 'rpush' command")
 	}
-	v, found := store[args[1]]
+	v, found := server.store.get(args[1])
 	list := []string{}
 	if found {
 		if v.Kind != KindStringList {
@@ -64,17 +64,17 @@ func handleRpush(_ *Client, args []string) string {
 	}
 	list = append(list, args[2:]...)
 	count := len(list)
-	list = checkWaiters(args[1], list)
-	setKey(args[1], StoreValue{Kind: KindStringList, Slice: list})
-	repl.propagate(args)
+	list = server.store.checkWaiters(args[1], list)
+	server.store.set(args[1], StoreValue{Kind: KindStringList, Slice: list})
+	server.repl.propagate(args)
 	return encodeInteger(count)
 }
 
-func handleLpush(_ *Client, args []string) string {
+func handleLpush(server *Server, client *Client, args []string) string {
 	if len(args) < 3 {
 		return encodeError("ERR wrong number of arguments for 'lpush' command")
 	}
-	v, found := store[args[1]]
+	v, found := server.store.get(args[1])
 	list := []string{}
 	if found {
 		if v.Kind != KindStringList {
@@ -86,28 +86,28 @@ func handleLpush(_ *Client, args []string) string {
 		list = append([]string{args[i]}, list...)
 	}
 	count := len(list)
-	list = checkWaiters(args[1], list)
-	setKey(args[1], StoreValue{Kind: KindStringList, Slice: list})
-	repl.propagate(args)
+	list = server.store.checkWaiters(args[1], list)
+	server.store.set(args[1], StoreValue{Kind: KindStringList, Slice: list})
+	server.repl.propagate(args)
 	return encodeInteger(count)
 }
 
-func handleLlen(_ *Client, args []string) string {
+func handleLlen(server *Server, client *Client, args []string) string {
 	if len(args) != 2 {
 		return encodeError("ERR wrong number of arguments for 'llen' command")
 	}
-	v, found := store[args[1]]
+	v, found := server.store.get(args[1])
 	if !found {
 		return encodeInteger(0)
 	}
 	return encodeInteger(len(v.Slice))
 }
 
-func handleLrange(_ *Client, args []string) string {
+func handleLrange(server *Server, client *Client, args []string) string {
 	if len(args) != 4 {
 		return encodeError("ERR wrong number of arguments for 'lrange' command")
 	}
-	v, found := store[args[1]]
+	v, found := server.store.get(args[1])
 	if !found {
 		return encodeArray([]string{})
 	}
@@ -141,11 +141,11 @@ func handleLrange(_ *Client, args []string) string {
 	return encodeArray(list[start : end+1])
 }
 
-func handleLpop(_ *Client, args []string) string {
+func handleLpop(server *Server, client *Client, args []string) string {
 	if len(args) < 2 || len(args) > 3 {
 		return encodeError("ERR wrong number of arguments for 'lpop' command")
 	}
-	v, found := store[args[1]]
+	v, found := server.store.get(args[1])
 	if !found {
 		return encodeNullBulk()
 	}
@@ -164,8 +164,8 @@ func handleLpop(_ *Client, args []string) string {
 			return encodeError("ERR value is not an integer or out of range")
 		}
 		if numToRemove >= len(list) {
-			setKey(args[1], StoreValue{Kind: KindStringList, Slice: []string{}})
-			repl.propagate(args)
+			server.store.set(args[1], StoreValue{Kind: KindStringList, Slice: []string{}})
+			server.repl.propagate(args)
 			return encodeArray(list)
 		}
 		var removed []string
@@ -174,18 +174,18 @@ func handleLpop(_ *Client, args []string) string {
 			removed = append(removed, element)
 			list = list[1:]
 		}
-		setKey(args[1], StoreValue{Kind: KindStringList, Slice: list})
-		repl.propagate(args)
+		server.store.set(args[1], StoreValue{Kind: KindStringList, Slice: list})
+		server.repl.propagate(args)
 		return encodeArray(removed)
 	}
 
 	element := list[0]
-	setKey(args[1], StoreValue{Kind: KindStringList, Slice: list[1:]})
-	repl.propagate(args)
+	server.store.set(args[1], StoreValue{Kind: KindStringList, Slice: list[1:]})
+	server.repl.propagate(args)
 	return encodeBulkString(element)
 }
 
-func handleBlpop(_ *Client, args []string) string {
+func handleBlpop(server *Server, client *Client, args []string) string {
 	if len(args) != 3 {
 		return encodeError("ERR wrong number of arguments for 'lpop' command")
 	}
@@ -195,31 +195,31 @@ func handleBlpop(_ *Client, args []string) string {
 		return encodeError("ERR value is not an integer or out of range")
 	}
 
-	v, found := store[key]
+	v, found := server.store.get(key)
 	if found && v.Kind == KindStringList && len(v.Slice) > 0 {
 		element := v.Slice[0]
-		setKey(key, StoreValue{Kind: KindStringList, Slice: v.Slice[1:]})
+		server.store.set(key, StoreValue{Kind: KindStringList, Slice: v.Slice[1:]})
 		return encodeArray([]string{key, element})
 	}
 
 	ch := make(chan string, 1)
-	waitersMu.Lock()
-	waiters[key] = append(waiters[key], ch)
-	waitersMu.Unlock()
+	server.store.waitersMu.Lock()
+	server.store.waiters[key] = append(server.store.waiters[key], ch)
+	server.store.waitersMu.Unlock()
 
 	if timeout > 0 {
 		expiryTime := time.Duration(timeout * float64(time.Second))
 		time.AfterFunc(expiryTime, func() {
-			waitersMu.Lock()
-			chans := waiters[key]
+			server.store.waitersMu.Lock()
+			chans := server.store.waiters[key]
 			for i, c := range chans {
 				if c == ch {
-					waiters[key] = append(chans[:i], chans[i+1:]...)
+					server.store.waiters[key] = append(chans[:i], chans[i+1:]...)
 					close(ch)
 					break
 				}
 			}
-			waitersMu.Unlock()
+			server.store.waitersMu.Unlock()
 		})
 	}
 
@@ -231,11 +231,11 @@ func handleBlpop(_ *Client, args []string) string {
 	return encodeArray([]string{key, element})
 }
 
-func handleType(_ *Client, args []string) string {
+func handleType(server *Server, client *Client, args []string) string {
 	if len(args) != 2 {
 		return encodeError("ERR wrong number of arguments for 'type' command")
 	}
-	v, found := store[args[1]]
+	v, found := server.store.get(args[1])
 	if !found {
 		return encodeSimpleString("none")
 	}
@@ -316,43 +316,13 @@ func validateEntryId(stream []map[string]string, id string) (string, string) {
 	return id, ""
 }
 
-func checkStreamWaiters(key string, entryId string, stream []map[string]string) []map[string]string {
-	streamWaitersMu.Lock()
-	channelEntries, ok := streamWaiters[key]
-	if !ok || len(channelEntries) == 0 {
-		streamWaitersMu.Unlock()
-		return stream
-	}
-	currMs, currSeqPtr, _ := parseEntryId(entryId)
-	currSeq := *currSeqPtr
-	for _, v := range channelEntries {
-		waiterMs, waiterSeqPtr, _ := parseEntryId(v.ID)
-		waiterSeq := *waiterSeqPtr
-		if currMs > waiterMs || (currMs == waiterMs && currSeq >= waiterSeq) {
-			ch := v.Channel
-			streamWaiters[key] = channelEntries[1:]
-			lastEntry := stream[len(stream)-1]
-			fields := []string{}
-			for k, val := range lastEntry {
-				if k != "id" {
-					fields = append(fields, k, val)
-				}
-			}
-			ch <- encodeStreamEntries([]StreamEntry{{ID: lastEntry["id"], Fields: encodeArray(fields)}})
-			break
-		}
-	}
-	streamWaitersMu.Unlock()
-	return stream
-}
-
-func handleXadd(_ *Client, args []string) string {
+func handleXadd(server *Server, client *Client, args []string) string {
 	if len(args) < 5 {
 		return encodeError("ERR wrong number of arguments for 'xadd' command")
 	}
 
 	streamKey := args[1]
-	v, found := store[streamKey]
+	v, found := server.store.get(streamKey)
 	stream := []map[string]string{}
 	if found {
 		if v.Kind != KindStream {
@@ -371,9 +341,9 @@ func handleXadd(_ *Client, args []string) string {
 		entry[keyValuePairs[i]] = keyValuePairs[i+1]
 	}
 	stream = append(stream, entry)
-	stream = checkStreamWaiters(streamKey, entryId, stream)
-	setKey(streamKey, StoreValue{Kind: KindStream, Stream: stream})
-	repl.propagate(args)
+	stream = server.store.checkStreamWaiters(streamKey, entryId, stream)
+	server.store.set(streamKey, StoreValue{Kind: KindStream, Stream: stream})
+	server.repl.propagate(args)
 	return encodeBulkString(entryId)
 }
 
@@ -401,11 +371,11 @@ func filterStream(stream []map[string]string, startMs int64, startSeq int, endMs
 	return entries
 }
 
-func handleXrange(_ *Client, args []string) string {
+func handleXrange(server *Server, client *Client, args []string) string {
 	if len(args) != 4 {
 		return encodeError("ERR wrong number of arguments for 'xrange' command")
 	}
-	v, found := store[args[1]]
+	v, found := server.store.get(args[1])
 	if !found {
 		return encodeArray([]string{})
 	}
@@ -438,7 +408,7 @@ func handleXrange(_ *Client, args []string) string {
 	return encodeStreamEntries(filterStream(v.Stream, startMs, startSeq, endMs, endSeq))
 }
 
-func handleXread(_ *Client, args []string) string {
+func handleXread(server *Server, client *Client, args []string) string {
 	if len(args) < 4 {
 		return encodeError("ERR syntax error")
 	}
@@ -454,7 +424,7 @@ func handleXread(_ *Client, args []string) string {
 		streamKey := args[4]
 		entryId := args[5]
 		if entryId == "$" {
-			v, found := store[streamKey]
+			v, found := server.store.get(streamKey)
 			if found && v.Kind == KindStream {
 				entries := v.Stream
 				if len(entries) > 0 {
@@ -473,7 +443,7 @@ func handleXread(_ *Client, args []string) string {
 			seq = *seqPtr
 		}
 		seq++
-		v, found := store[streamKey]
+		v, found := server.store.get(streamKey)
 		if found && v.Kind == KindStream {
 			entries := filterStream(v.Stream, ms, seq, math.MaxInt64, math.MaxInt64)
 			if len(entries) > 0 {
@@ -482,23 +452,23 @@ func handleXread(_ *Client, args []string) string {
 		}
 
 		ch := make(chan string, 1)
-		streamWaitersMu.Lock()
-		streamWaiters[streamKey] = append(streamWaiters[streamKey], StreamWaiterEntry{ID: entryId, Channel: ch})
-		streamWaitersMu.Unlock()
+		server.store.streamWaitersMu.Lock()
+		server.store.streamWaiters[streamKey] = append(server.store.streamWaiters[streamKey], StreamWaiterEntry{ID: entryId, Channel: ch})
+		server.store.streamWaitersMu.Unlock()
 
 		if timeout > 0 {
 			expiryTime := time.Duration(timeout * int(time.Millisecond))
 			time.AfterFunc(expiryTime, func() {
-				streamWaitersMu.Lock()
-				chans := streamWaiters[streamKey]
+				server.store.streamWaitersMu.Lock()
+				chans := server.store.streamWaiters[streamKey]
 				for i, c := range chans {
 					if c.Channel == ch {
-						streamWaiters[streamKey] = append(chans[:i], chans[i+1:]...)
+						server.store.streamWaiters[streamKey] = append(chans[:i], chans[i+1:]...)
 						close(ch)
 						break
 					}
 				}
-				streamWaitersMu.Unlock()
+				server.store.streamWaitersMu.Unlock()
 			})
 		}
 
@@ -528,7 +498,7 @@ func handleXread(_ *Client, args []string) string {
 				seq = *seqPtr
 			}
 			seq++
-			v, found := store[streamKey]
+			v, found := server.store.get(streamKey)
 			entries := []StreamEntry{}
 			if found && v.Kind == KindStream {
 				entries = filterStream(v.Stream, ms, seq, math.MaxInt64, math.MaxInt64)
@@ -541,12 +511,12 @@ func handleXread(_ *Client, args []string) string {
 	}
 }
 
-func handleIncr(_ *Client, args []string) string {
+func handleIncr(server *Server, client *Client, args []string) string {
 	if len(args) != 2 {
 		return encodeError("ERR syntax error")
 	}
 	key := args[1]
-	v, found := store[key]
+	v, found := server.store.get(key)
 	num := 0
 	if found {
 		numValue, err := strconv.Atoi(v.S)
@@ -556,101 +526,101 @@ func handleIncr(_ *Client, args []string) string {
 		num = numValue
 	}
 	resNum := num + 1
-	setKey(key, StoreValue{Kind: KindString, S: strconv.Itoa(resNum)})
-	repl.propagate(args)
+	server.store.set(key, StoreValue{Kind: KindString, S: strconv.Itoa(resNum)})
+	server.repl.propagate(args)
 	return encodeInteger(resNum)
 }
 
-func handleMulti(c *Client, args []string) string {
+func handleMulti(server *Server, client *Client, args []string) string {
 	if len(args) != 1 {
 		return encodeError("ERR syntax error")
 	}
-	if c.multiCommands != nil {
+	if client.multiCommands != nil {
 		return encodeError("ERR MULTI calls can not be nested")
 	}
-	c.multiCommands = []func() string{}
+	client.multiCommands = []func() string{}
 	return encodeSimpleString("OK")
 }
 
-func handleExec(c *Client, args []string) string {
+func handleExec(server *Server, client *Client, args []string) string {
 	if len(args) != 1 {
 		return encodeError("ERR syntax error")
 	}
-	if c.multiCommands == nil {
+	if client.multiCommands == nil {
 		return encodeError("ERR EXEC without MULTI")
 	}
 	isWatchMutated := false
-	versionsMu.Lock()
-	for key, version := range c.watched {
-		storeVersion := versions[key]
+	server.store.versionsMu.Lock()
+	for key, version := range client.watched {
+		storeVersion := server.store.versions[key]
 		if storeVersion != version {
 			isWatchMutated = true
 			break
 		}
 	}
-	versionsMu.Unlock()
+	server.store.versionsMu.Unlock()
 	resp := encodeNullArray()
 	if !isWatchMutated {
-		resp = fmt.Sprintf("*%d\r\n", len(c.multiCommands))
-		for _, queuedCall := range c.multiCommands {
+		resp = fmt.Sprintf("*%d\r\n", len(client.multiCommands))
+		for _, queuedCall := range client.multiCommands {
 			resp += queuedCall()
 		}
 	}
-	c.multiCommands = nil
-	c.watched = nil
+	client.multiCommands = nil
+	client.watched = nil
 	return resp
 }
 
-func handleDiscard(c *Client, args []string) string {
+func handleDiscard(server *Server, client *Client, args []string) string {
 	if len(args) != 1 {
 		return encodeError("ERR syntax error")
 	}
-	if c.multiCommands == nil {
+	if client.multiCommands == nil {
 		return encodeError("ERR DISCARD without MULTI")
 	}
-	c.multiCommands = nil
-	c.watched = nil
+	client.multiCommands = nil
+	client.watched = nil
 	return encodeSimpleString("OK")
 }
 
-func handleWatch(c *Client, args []string) string {
+func handleWatch(server *Server, client *Client, args []string) string {
 	if len(args) < 2 {
 		return encodeError("ERR syntax error")
 	}
-	if c.multiCommands != nil {
+	if client.multiCommands != nil {
 		return encodeError("ERR WATCH inside MULTI is not allowed")
 	}
 	keys := args[1:]
-	versionsMu.Lock()
+	server.store.versionsMu.Lock()
 	for _, k := range keys {
-		v := versions[k]
-		c.watched[k] = v
+		v := server.store.versions[k]
+		client.watched[k] = v
 	}
-	versionsMu.Unlock()
+	server.store.versionsMu.Unlock()
 	return encodeSimpleString("OK")
 }
 
-func handleUnwatch(c *Client, args []string) string {
+func handleUnwatch(server *Server, client *Client, args []string) string {
 	if len(args) != 1 {
 		return encodeError("ERR syntax error")
 	}
-	c.watched = nil
+	client.watched = nil
 	return encodeSimpleString("OK")
 }
 
-func handleInfo(c *Client, args []string) string {
+func handleInfo(server *Server, client *Client, args []string) string {
 	if len(args) != 2 {
 		return encodeError("ERR syntax error")
 	}
-	output := fmt.Sprintf("role:%s\r\n", c.role)
-	if c.role == "master" {
-		output += fmt.Sprintf("master_replid:%s\r\n", repl.replid)
-		output += fmt.Sprintf("master_repl_offset:%d\r\n", repl.offset)
+	output := fmt.Sprintf("role:%s\r\n", server.role)
+	if server.role == "master" {
+		output += fmt.Sprintf("master_replid:%s\r\n", server.repl.replid)
+		output += fmt.Sprintf("master_repl_offset:%d\r\n", server.repl.offset)
 	}
 	return encodeBulkString(output)
 }
 
-func handleReplconf(c *Client, args []string) string {
+func handleReplconf(server *Server, client *Client, args []string) string {
 	if len(args) < 2 {
 		return encodeError("ERR syntax error")
 	}
@@ -669,29 +639,29 @@ func handleReplconf(c *Client, args []string) string {
 		}
 		return encodeSimpleString("OK")
 	case "getack":
-		return encodeArray([]string{"REPLCONF", "ACK", strconv.Itoa(c.replOffset)})
+		return encodeArray([]string{"REPLCONF", "ACK", strconv.Itoa(client.replOffset)})
 	default:
 		return encodeError("ERR unknown REPLCONF option")
 	}
 }
 
-func handlePsync(c *Client, args []string) string {
+func handlePsync(server *Server, client *Client, args []string) string {
 	if len(args) != 3 {
 		return encodeError("ERR syntax error")
 	}
 
-	resString := "FULLRESYNC " + repl.replid + " " + strconv.Itoa(repl.offset)
-	c.conn.Write([]byte(encodeSimpleString(resString)))
+	resString := "FULLRESYNC " + server.repl.replid + " " + strconv.Itoa(server.repl.offset)
+	client.conn.Write([]byte(encodeSimpleString(resString)))
 
 	rdbBytes, _ := hex.DecodeString(emptyRDBHex)
-	c.conn.Write([]byte(fmt.Sprintf("$%d\r\n", len(rdbBytes))))
-	c.conn.Write(rdbBytes)
+	client.conn.Write([]byte(fmt.Sprintf("$%d\r\n", len(rdbBytes))))
+	client.conn.Write(rdbBytes)
 
-	repl.addReplica(c.conn)
+	server.repl.addReplica(client.conn)
 	return ""
 }
 
-func handleWait(c *Client, args []string) string {
+func handleWait(server *Server, client *Client, args []string) string {
 	if len(args) != 3 {
 		return encodeError("ERR syntax error")
 	}
@@ -704,15 +674,15 @@ func handleWait(c *Client, args []string) string {
 		return encodeError("ERR value is not an integer or out of range")
 	}
 
-	repl.mu.Lock()
-	masterOffset := repl.offset
-	repl.mu.Unlock()
+	server.repl.mu.Lock()
+	masterOffset := server.repl.offset
+	server.repl.mu.Unlock()
 
 	countCaughtUp := func() int {
-		repl.mu.Lock()
-		defer repl.mu.Unlock()
+		server.repl.mu.Lock()
+		defer server.repl.mu.Unlock()
 		count := 0
-		for _, rc := range repl.replicas {
+		for _, rc := range server.repl.replicas {
 			if rc.knownOffset >= masterOffset {
 				count++
 			}
@@ -721,9 +691,9 @@ func handleWait(c *Client, args []string) string {
 	}
 
 	if masterOffset == 0 {
-		repl.mu.Lock()
-		n := len(repl.replicas)
-		repl.mu.Unlock()
+		server.repl.mu.Lock()
+		n := len(server.repl.replicas)
+		server.repl.mu.Unlock()
 		return encodeInteger(n)
 	}
 
@@ -731,7 +701,7 @@ func handleWait(c *Client, args []string) string {
 		return encodeInteger(countCaughtUp())
 	}
 
-	repl.sendGetAck()
+	server.repl.sendGetAck()
 
 	if timeoutMs == 0 {
 		return encodeInteger(countCaughtUp())
@@ -747,7 +717,27 @@ func handleWait(c *Client, args []string) string {
 	return encodeInteger(countCaughtUp())
 }
 
-var commandHandlers = map[string]func(*Client, []string) string{
+func handleConfig(server *Server, client *Client, args []string) string {
+	if len(args) < 3 {
+		return encodeError("ERR syntax error")
+	}
+	subCmd := strings.ToUpper(args[1])
+	if subCmd != "GET" {
+		return encodeError("ERR unsupported CONFIG subcommand: " + args[1])
+	}
+	param := strings.ToLower(args[2])
+	configMap := map[string]string{
+		"dir":        server.dir,
+		"dbfilename": server.dbfilename,
+	}
+	val, ok := configMap[param]
+	if !ok {
+		return encodeArray([]string{})
+	}
+	return encodeArray([]string{param, val})
+}
+
+var commandHandlers = map[string]func(*Server, *Client, []string) string{
 	"PING":     handlePing,
 	"ECHO":     handleEcho,
 	"GET":      handleGet,
@@ -772,4 +762,5 @@ var commandHandlers = map[string]func(*Client, []string) string{
 	"REPLCONF": handleReplconf,
 	"PSYNC":    handlePsync,
 	"WAIT":     handleWait,
+	"CONFIG": handleConfig,
 }

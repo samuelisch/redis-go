@@ -6,25 +6,35 @@ import (
 	"strings"
 )
 
+type Server struct {
+	store      *Store
+	repl       *ReplicationManager
+	role       string
+	dir        string
+	dbfilename string
+}
+
+func newServer(role string, replid string, dir string, dbfilename string) *Server {
+	return &Server{
+		store:      newStore(),
+		repl:       &ReplicationManager{replid: replid},
+		role:       role,
+		dir:        dir,
+		dbfilename: dbfilename,
+	}
+}
+
 type Client struct {
 	conn          net.Conn
 	multiCommands []func() string
 	watched       map[string]uint64
-	role          string
 	replOffset    int
 }
 
-func handleConn(conn net.Conn, replicaVal string) {
-	clientRole := "master"
-	if replicaVal != "" {
-		clientRole = "slave"
-	}
-
+func handleConn(server *Server, conn net.Conn) {
 	client := &Client{
-		conn:          conn,
-		multiCommands: nil,
-		watched:       map[string]uint64{},
-		role:          clientRole,
+		conn:    conn,
+		watched: map[string]uint64{},
 	}
 
 	transferred := false
@@ -49,11 +59,11 @@ func handleConn(conn net.Conn, replicaVal string) {
 		}
 		if cmd != "MULTI" && cmd != "EXEC" && cmd != "DISCARD" && cmd != "WATCH" && cmd != "UNWATCH" && client.multiCommands != nil {
 			client.multiCommands = append(client.multiCommands, func() string {
-				return handler(client, args)
+				return handler(server, client, args)
 			})
 			conn.Write([]byte(encodeSimpleString("QUEUED")))
 		} else {
-			conn.Write([]byte(handler(client, args)))
+			conn.Write([]byte(handler(server, client, args)))
 		}
 		if cmd == "PSYNC" {
 			transferred = true
