@@ -81,7 +81,9 @@ var streamWaitersMu sync.RWMutex
 const emptyRDBHex = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2"
 
 type ReplicaConn struct {
-	writer *bufio.Writer
+	writer      *bufio.Writer
+	reader      *bufio.Reader
+	knownOffset int
 }
 
 type ReplicationManager struct {
@@ -92,10 +94,15 @@ type ReplicationManager struct {
 }
 
 func (r *ReplicationManager) addReplica(conn net.Conn) *ReplicaConn {
-	rc := &ReplicaConn{writer: bufio.NewWriter(conn)}
+	rc := &ReplicaConn{
+		writer: bufio.NewWriter(conn),
+		reader: bufio.NewReader(conn),
+	}
 	r.mu.Lock()
 	r.replicas = append(r.replicas, rc)
 	r.mu.Unlock()
+
+	go rc.readLoop()
 	return rc
 }
 
@@ -113,6 +120,33 @@ func (r *ReplicationManager) propagate(args []string) {
 		}
 	}
 	r.replicas = alive
+}
+
+func (r *ReplicationManager) sendGetAck() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	getack := encodeArray([]string{"REPLCONF", "GETACK", "*"})
+	for _, rc := range r.replicas {
+		rc.writer.WriteString(getack)
+		rc.writer.Flush()
+	}
+}
+
+func (rc *ReplicaConn) readLoop() {
+	for {
+		args, err := parseCommand(rc.reader)
+		if err != nil {
+			return
+		}
+		if len(args) == 3 && strings.ToUpper(args[0]) == "REPLCONF" && strings.ToUpper(args[1]) == "ACK" {
+			offset, err := strconv.Atoi(args[2])
+			if err == nil {
+				repl.mu.Lock()
+				rc.knownOffset = offset
+				repl.mu.Unlock()
+			}
+		}
+	}
 }
 
 var repl *ReplicationManager
@@ -901,7 +935,59 @@ func handlePsync(c *Client, args []string) string {
 }
 
 func handleWait(c *Client, args []string) string {
-	return encodeInteger(len(repl.replicas))
+	if len(args) != 3 {
+		return encodeError("ERR syntax error")
+	}
+	numReplicas, err := strconv.Atoi(args[1])
+	if err != nil {
+		return encodeError("ERR value is not an integer or out of range")
+	}
+	timeoutMs, err := strconv.Atoi(args[2])
+	if err != nil {
+		return encodeError("ERR value is not an integer or out of range")
+	}
+
+	repl.mu.Lock()
+	masterOffset := repl.offset
+	repl.mu.Unlock()
+
+	countCaughtUp := func() int {
+		repl.mu.Lock()
+		defer repl.mu.Unlock()
+		count := 0
+		for _, rc := range repl.replicas {
+			if rc.knownOffset >= masterOffset {
+				count++
+			}
+		}
+		return count
+	}
+
+	if masterOffset == 0 {
+		repl.mu.Lock()
+		n := len(repl.replicas)
+		repl.mu.Unlock()
+		return encodeInteger(n)
+	}
+
+	if countCaughtUp() >= numReplicas {
+		return encodeInteger(countCaughtUp())
+	}
+
+	repl.sendGetAck()
+
+	if timeoutMs == 0 {
+		return encodeInteger(countCaughtUp())
+	}
+
+	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if n := countCaughtUp(); n >= numReplicas {
+			return encodeInteger(n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return encodeInteger(countCaughtUp())
 }
 
 var commandHandlers = map[string]func(*Client, []string) string{
