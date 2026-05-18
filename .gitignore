@@ -1,0 +1,14 @@
+# Build output
+/tmp/codecrafters-build-redis-go
+
+# Docs and local tooling
+/docs
+/.claude
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
