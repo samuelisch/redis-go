@@ -6,7 +6,7 @@ A Redis server built from scratch, as part of the [CodeCrafters "Build Your Own 
 
 Progressively less-broken Redis. Every commit gets asserted against unit tests to check functionality, so what I've done here is solving each functionality of Redis, honing in on correctness of outputs, before optimising for edge cases.
 
-The final server handles:
+The server handles:
 
 - **Core Commands**: `PING`, `ECHO`, `INCR`
 - **Strings**: `GET`, `SET` (with `EX`/`PX`)
