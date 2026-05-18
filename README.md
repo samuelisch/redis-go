@@ -2,8 +2,6 @@
 
 A Redis server built from scratch, as part of the [CodeCrafters "Build Your Own Redis"](https://codecrafters.io/challenges/redis) challenge. I decided to build this in Go to get hands-on experience with its built-in concurrency model (goroutines and channels) while implementing a Redis server from scratch.
 
----
-
 ## What this is
 
 Progressively less-broken Redis. Every commit gets asserted against unit tests to check functionality, so what I've done here is solving each functionality of Redis, honing in on correctness of outputs, before optimising for edge cases.
@@ -22,8 +20,6 @@ Still to come: RDB persistence, AOF persistence, Pub/Sub, Sorted Sets, Geospatia
 
 I'm sure that my implementation here isn't exactly the most accurate to what the Redis team has built, there are so many edge cases that they handle gracefully. This exercise is mainly an exploratory one, that drills an understanding of how Redis works below the hood.
 
----
-
 ## How it was built
 
 ### 1. TCP listener → PING
@@ -38,19 +34,16 @@ conn.Close()
 
 Handles a single connection to start off. Had to read up on goroutines, fun stuff that node handles out of the box.
 
----
 
 ### 2. Concurrent connections
 
 The loop came next: `for { conn := listener.Accept(); go handleConn(conn) }`. One goroutine per client, nothing shared yet between them. I get a false sense of "Hey this isn't that bad."
 
----
 
 ### 3. RESP parsing
 
 Realised raw `conn.Read` doesn't give you clean message boundaries. Switched to `bufio.NewReader` + `ReadString('\n')` to walk the RESP wire format properly. The RESP array format (`*<n>\r\n$<len>\r\n<value>\r\n` per argument) is why you can't just split on spaces — binary values, newlines in payloads, etc. The parser reads arg count first, then reads each bulk string by length prefix.
 
----
 
 ### 4. Key-value store + typed values
 
@@ -67,13 +60,11 @@ type StoreValue struct {
 
 `GET` and `SET` only touch `KindString`. Everything else checks `Kind` first and returns `WRONGTYPE` if it doesn't match. Tried wrapping my head around structs by comparing them to TypeScript interfaces. 
 
----
 
 ### 5. Key expiry — and a logic bug
 
 Schedules deletetion via `time.AfterFunc` when dealing with `EX` and `PX`.
 
----
 
 ### 6. Lists
 
@@ -81,7 +72,6 @@ Schedules deletetion via `time.AfterFunc` when dealing with `EX` and `PX`.
 
 Got really dumbfounded with `LPOP`. why not `SHIFT`? I guess it has to deal with stacks and queues too.
 
----
 
 ### 7. Blocking lists — channels as waiters
 
@@ -96,7 +86,6 @@ element, ok := <-ch  // blocks here
 
 Channels are something entirely new to me at this point, since the event loop with js/ts is single threaded, we don't need to worry about data races like in Go's goroutines, as there are no shared memory with multithreading structure.
 
----
 
 ### 8. Streams
 
@@ -104,13 +93,11 @@ Channels are something entirely new to me at this point, since the event loop wi
 
 `XRANGE` filters entries between two IDs (supporting `-` and `+` as min/max). `XREAD BLOCK` reuses the same channel pattern as `BLPOP` — a goroutine parks on a channel, and `XADD` wakes it when a matching entry arrives.
 
----
 
 ### 9. INCR
 
 A simple increment on a key value. 
 
----
 
 ### 10. Transactions — MULTI/EXEC/DISCARD
 
@@ -123,7 +110,6 @@ client.multiCommands = append(client.multiCommands, func() string {
 conn.Write([]byte("+QUEUED\r\n"))
 ```
 
----
 
 ### 11. WATCH — optimistic concurrency
 
@@ -143,7 +129,6 @@ func (st *Store) set(key string, value StoreValue) {
 
 `WATCH` snapshots the current version; `EXEC` compares it. If they diverge, we abort the execution.
 
----
 
 ### 12. Replication handshake
 
@@ -163,7 +148,6 @@ A replica connects to a master and runs a fixed handshake before receiving any c
 
 The `PSYNC ? -1` tells the master "I have no prior state, give me everything." The master replies with `FULLRESYNC`, then immediately sends an RDB snapshot (a hardcoded empty blob here), then starts streaming write commands. I haven't expanded from there, but cool to know what happens right after handshake so that the replica has all the context of the master server.
 
----
 
 ### 13. Command propagation
 
@@ -171,7 +155,6 @@ After every write command on the master, `propagate()` encodes the command as a 
 
 Replicas apply commands silently: same handlers, same store mutations, no reply written back. We'd handle them with `REPLCONF GETACK`.
 
----
 
 ### 14. WAIT
 
@@ -179,7 +162,6 @@ Replicas apply commands silently: same handlers, same store mutations, no reply 
 
 Not very elegant, but it works and matches the expected behavior. Reading into Redis' actual implementation, seems like the main server executing `WAIT` is put to sleep until the required amount of replicas has caught up to the offset, or the timer runs out. 
 
----
 
 ## File layout
 
